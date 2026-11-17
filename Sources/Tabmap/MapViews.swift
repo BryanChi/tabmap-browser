@@ -198,6 +198,7 @@ struct TrailRow: View {
             .overlay(alignment: .topTrailing) { DownloadBadge(tabID: tab.id, style: style) }
             .tabDragDrop(tab: tab, cornerRadius: style == .cards ? 8 : 6, acceptsDrops: acceptsDrops)
             .modifier(SplitMarker(tab: tab, trail: trail, style: style))
+            .mapSelectionMark(tab.id, style: style)
             .id(tab.id)
             .contentShape(Rectangle())
             .onTapGesture { store.choose(tab.id) }
@@ -246,6 +247,7 @@ struct TrailRow: View {
 
     @ViewBuilder
     private func menu(_ tab: MapTab) -> some View {
+        MapSelectionMenuItems(tab: tab)
         if tab.isClosed {
             Button("Reopen") { store.choose(tab.id) }
             Button("Forget This Tab") { store.forgetTab(tab.id) }
@@ -507,7 +509,9 @@ struct MapOverview: View {
                     TabMapView(style: .cards, query: store.overviewQuery, selection: store.overviewSelection)
                         .padding(20)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .mapSelectionContent()
                 }
+                .overlay { MapSelectionLayer() }
                 .overlay(alignment: .bottom) { NewTrailDropStrip(style: .cards) }
                 .onChange(of: store.overviewSelection) { id in
                     guard let id else { return }

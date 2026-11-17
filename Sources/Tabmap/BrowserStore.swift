@@ -505,6 +505,8 @@ final class BrowserStore: ObservableObject {
         guard overviewShown, !BookmarkStore.shared.boardShown else { return event }
         // Typing a row's new name: its field gets the keys.
         if RowControls.shared.renaming != nil { return event }
+        // Several tabs picked in the map (MapSelection.swift): esc lets go, ⌘W closes them.
+        if MapSelection.shared.handleKey(event) { return nil }
         let command = event.modifierFlags.contains(.command)
         switch event.keyCode {
         case 53: // escape
@@ -705,7 +707,7 @@ final class BrowserStore: ObservableObject {
     }
 
     /// Puts a page to sleep unless it is playing audio or video right now.
-    private func sleepUnlessPlaying(_ id: TabID) {
+    func sleepUnlessPlaying(_ id: TabID) {
         guard let page = webTabs[id] else { return }
         let script = "Array.from(document.querySelectorAll('audio,video')).some(function(m){return !m.paused && !m.ended})"
         page.webView.evaluateJavaScript(script) { result, _ in

@@ -660,6 +660,50 @@ final class BookmarkStore: ObservableObject {
         guard let data = try? JSONEncoder().encode(library) else { return }
         try? data.write(to: libraryURL, options: .atomic)
     }
+
+    // MARK: Tabs picked in the map
+
+    /// Saves tabs picked together in the map (MapSelection.swift) as one bookmark. Tabs all from one named row
+    /// take the row's name; otherwise the first page's title.
+    func bookmarkTabs(_ ids: [TabID]) {
+        let browser = BrowserStore.shared
+        let map = browser.map
+        let tabs = ids.compactMap { map.tab($0) }
+        let pages = tabs.compactMap { tab -> SavedPage? in
+            guard let url = tab.url, Self.isSaveable(url) else { return nil }
+            return SavedPage(url: url, title: tab.displayTitle)
+        }
+        guard let first = pages.first, let firstID = tabs.first(where: { Self.isSaveable($0.url) })?.id else {
+            showToast(.nothingToSave, nil)
+            return
+        }
+        let now = Date()
+        let rows = Set(ids.compactMap { map.locate($0)?.trail })
+        let row = rows.count == 1 ? rows.first.map { map.trails[$0] } : nil
+        let name = row?.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let title: String
+        if pages.count == 1 {
+            title = first.title
+        } else if !name.isEmpty {
+            title = name
+        } else {
+            title = "\(first.title) and \(pages.count - 1) more"
+        }
+        var bookmark = pages.count == 1 ? Bookmark(url: first.url, title: title, now: now)
+                                        : Bookmark(url: first.url, title: title, pages: pages, now: now)
+        bookmark.summary = row?.summary ?? ""
+        library.add(bookmark)
+        storeText(pages.map(\.title).joined(separator: "\n"), for: bookmark.id)
+        if let webView = browser.page(for: firstID)?.webView, webView.window != nil {
+            capture(webView, for: bookmark.id)
+        } else if let image = browser.snapshot(for: firstID) {
+            saveImage(image, for: bookmark.id)
+        }
+        scheduleSave()
+        showToast(pages.count == 1 ? .saved : .rowSaved, bookmark.id)
+        file(bookmark.id, input: FilingInput(title: bookmark.title, url: first.url, description: bookmark.summary,
+                                             pageTitles: pages.map(\.title)))
+    }
 }
 
 // MARK: Filing with the on-device model

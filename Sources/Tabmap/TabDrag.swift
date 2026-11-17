@@ -125,11 +125,11 @@ private struct TabCellDropDelegate: DropDelegate {
         switch landed {
         case .onto:
             if let split = drag.splitHandler, split(dragged, tab.id) { return true }
-            store.moveTab(dragged, to: info.location.x < width / 2 ? .before(tab.id) : .after(tab.id))
+            store.moveDragged(dragged, to: info.location.x < width / 2 ? .before(tab.id) : .after(tab.id))
         case .before:
-            store.moveTab(dragged, to: .before(tab.id))
+            store.moveDragged(dragged, to: .before(tab.id))
         default:
-            store.moveTab(dragged, to: .after(tab.id))
+            store.moveDragged(dragged, to: .after(tab.id))
         }
         return true
     }
@@ -230,9 +230,9 @@ private struct TrailDropDelegate: DropDelegate {
         guard let dragged = drag.dragging else { drag.end(); return false }
         drag.end()
         if let anchor {
-            store.moveTab(dragged, to: .after(anchor.id))
+            store.moveDragged(dragged, to: .after(anchor.id))
         } else {
-            store.moveTab(dragged, to: .endOfTrail(trail.id))
+            store.moveDragged(dragged, to: .endOfTrail(trail.id))
         }
         return true
     }
@@ -272,7 +272,7 @@ private struct NewTrailDropDelegate: DropDelegate {
     func performDrop(info: DropInfo) -> Bool {
         guard let dragged = drag.dragging else { drag.end(); return false }
         drag.end()
-        store.moveTab(dragged, to: .newTrail)
+        store.moveDragged(dragged, to: .newTrail)
         return true
     }
 }
