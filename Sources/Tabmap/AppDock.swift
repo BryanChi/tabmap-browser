@@ -35,7 +35,7 @@ final class DockPage: NSObject, ObservableObject, Identifiable, WKNavigationDele
     init(id: TabID = TabID(), role: Role, configuration: WKWebViewConfiguration? = nil, adopting: WKWebView? = nil) {
         self.id = id
         self.role = role
-        self.webView = adopting ?? WKWebView(frame: .zero, configuration: configuration ?? WebTab.makeConfiguration())
+        self.webView = adopting ?? PageWebView(frame: .zero, configuration: configuration ?? WebTab.makeConfiguration())
         super.init()
         webView.navigationDelegate = self
         webView.uiDelegate = self
