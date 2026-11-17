@@ -273,6 +273,7 @@ struct TrailRow: View {
     private func tooltip(_ tab: MapTab) -> String {
         var lines = [tab.displayTitle]
         if let url = tab.url?.absoluteString, url != tab.displayTitle { lines.append(url) }
+        if let note = store.sourceNote(for: tab) { lines.append(note) }
         if tab.isClosed { lines.append("Closed. Click to reopen.") }
         return lines.joined(separator: "\n")
     }
@@ -336,7 +337,12 @@ struct TabChip: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            if !collapsed, let app = tab.sourceApp { SourceAppIcon(app: app, size: 14) }
             FaviconView(url: tab.url, size: 14)
+                .overlay(alignment: .bottomTrailing) {
+                    // A shrunk closed tab only has room for a badge.
+                    if collapsed, let app = tab.sourceApp { SourceAppIcon(app: app, size: 9).offset(x: 3, y: 3) }
+                }
             if !collapsed {
                 Text(tab.displayTitle)
                     .font(.system(size: 12))
@@ -388,6 +394,7 @@ struct TabCard: View {
                 }
             }
             .frame(width: width, height: height)
+            .overlay(alignment: .topLeading) { SourceAppCorner(app: tab.sourceApp) }
             .reportsCardFrame(for: tab.id)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(

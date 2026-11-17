@@ -19,6 +19,7 @@ codesign --force --deep --sign - "$APP"
 # Install over /Applications/Tabmap.app (what Spotlight opens) when we can.
 if [ -w /Applications ]; then
     ditto "$APP" /Applications/Tabmap.app
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Tabmap.app || true
     echo "Installed /Applications/Tabmap.app"
 else
     echo "Skipped installing: /Applications is not writable"

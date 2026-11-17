@@ -64,6 +64,10 @@ final class WebTab: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelega
     }
 
     func load(_ url: URL) {
+        if url.isFileURL {
+            webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+            return
+        }
         webView.load(URLRequest(url: url))
     }
 

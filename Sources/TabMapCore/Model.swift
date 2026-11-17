@@ -19,6 +19,8 @@ public struct MapTab: Codable, Identifiable, Equatable {
     public var pinned: Bool
     /// Set when the person dragged this tab to where it is now. Automatic grouping should respect it.
     public var movedByHandAt: Date?
+    /// The app that handed Tabmap this link (Claude, Slack, Mail...), when it came from outside.
+    public var sourceApp: SourceApp?
 
     public init(id: TabID = TabID(), url: URL?, title: String = "", openerID: TabID? = nil, now: Date) {
         self.id = id
@@ -43,11 +45,15 @@ public struct MapTab: Codable, Identifiable, Equatable {
     }
 
     /// True when every word of `query` is found in the title or the address.
-    public func matches(_ query: String) -> Bool {
+    /// `aliases` are more words the tab can be found by, such as the name of the app it came from.
+    public func matches(_ query: String, aliases: [String] = []) -> Bool {
         let words = TextMatch.words(query)
         if words.isEmpty { return true }
         let address = url?.absoluteString ?? ""
-        return words.allSatisfy { TextMatch.contains(title, $0) || TextMatch.contains(address, $0) }
+        return words.allSatisfy { word in
+            TextMatch.contains(title, word) || TextMatch.contains(address, word)
+                || aliases.contains { TextMatch.contains($0, word) }
+        }
     }
 }
 

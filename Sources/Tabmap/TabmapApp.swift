@@ -4,6 +4,11 @@ import TabMapCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Links from other apps. Installed this early so a link that launches Tabmap is not lost.
+        ExternalLinks.shared.install()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Needed when launched with `swift run`, where there is no app bundle to say this is a regular app.
         NSApp.setActivationPolicy(.regular)
@@ -16,9 +21,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         BookmarkStore.shared.saveNow()
     }
 
-    /// A file dropped on the Dock icon: go to the page it was downloaded from.
+    /// Web pages (.html files opened with Tabmap, or links) open as pages, remembering the app that sent them.
+    /// Any other file dropped on the Dock icon: go to the page it was downloaded from.
     func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls where url.isFileURL { DownloadStore.shared.goToSource(ofFile: url) }
+        let pageExtensions: Set<String> = ["html", "htm", "xhtml", "shtml"]
+        let pages = urls.filter { !$0.isFileURL || pageExtensions.contains($0.pathExtension.lowercased()) }
+        if !pages.isEmpty { ExternalLinks.shared.openFiles(pages) }
+        for url in urls where url.isFileURL && !pageExtensions.contains(url.pathExtension.lowercased()) {
+            DownloadStore.shared.goToSource(ofFile: url)
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

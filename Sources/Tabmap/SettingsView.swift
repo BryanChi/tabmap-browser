@@ -39,6 +39,7 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            DefaultBrowserSection()
             Section {
                 Picker("Unload a tab's page after", selection: binding(\.sleepAfter)) {
                     ForEach(Self.sleepChoices) { Text($0.label).tag($0.value) }

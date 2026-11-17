@@ -98,6 +98,10 @@ The edge behaviour can be turned off in Settings; `⌥` + swipe keeps working. `
 - **Changes and dead links.** Once a day, saved pages are fetched (without your cookies) to see whether they changed or are gone. A page that is gone shows the copy saved when you bookmarked it.
 - Everything stays in `~/Library/Application Support/Tabmap/bookmarks`.
 
+## Links from other apps
+
+Links opened in other apps (Claude, Slack, Mail) open in a new row at the top of the map, with that app's icon on the tab. Search the map for the app's name to find them, along with the tabs you opened from them. For this, make Tabmap the default browser: Settings (⌘,) → Make Default.
+
 ## Keyboard
 
 | Keys | Action |
@@ -129,4 +133,4 @@ State is saved to `~/Library/Application Support/Tabmap` (the map as `state.json
 
 ## Not built yet
 
-Find in page, private windows, multiple windows, extensions, and being set as the default browser.
+Find in page, private windows, multiple windows, and extensions.

@@ -268,6 +268,22 @@ final class BrowserStore: ObservableObject {
         scheduleSave()
     }
 
+    /// A link another app handed to Tabmap (Claude, Slack, Mail...). It starts a new row at the top of the
+    /// map and remembers which app sent it, for the icon on the tab and for search.
+    func openFromApp(_ url: URL, app: SourceApp?) {
+        leaveActiveTab()
+        AppDock.shared.sendToBack()
+        let now = Date()
+        let opened = map.openFromApp(url: url, app: app, now: now)
+        if let discarded = opened.discarded { dropPage(discarded, forget: true) }
+        ensureLoaded(opened.id)
+        dwellTask?.cancel()
+        if overviewShown { GestureNavigator.shared.closeOverview(showing: opened.id) }
+        syncAddress()
+        focusPage()
+        scheduleSave()
+    }
+
     // MARK: Switching
 
     /// Makes `id` the current tab. `commit` counts it as used straight away (a deliberate pick from the map);

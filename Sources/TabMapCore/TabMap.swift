@@ -234,13 +234,14 @@ public struct TabMap: Codable, Equatable {
     public func layout(matching query: String = "") -> MapLayout {
         var open: [Trail] = []
         var archived: [Trail] = []
+        let index = TextMatch.words(query).isEmpty ? [:] : tabIndex
         for trail in trails {
             // Row order is decided on the unfiltered row so a search does not reorder the map.
             let isOpen = trail.hasOpenTabs
             var shown = trail
             // A row whose name or summary matches is shown whole; otherwise only its matching tabs.
             if !trail.labelMatches(query) {
-                shown.tabs = trail.tabs.filter { $0.matches(query) }
+                shown.tabs = trail.tabs.filter { $0.matches(query, aliases: Self.searchAliases(of: $0, in: index)) }
             }
             if shown.tabs.isEmpty { continue }
             if isOpen {
