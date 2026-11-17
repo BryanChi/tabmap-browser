@@ -102,6 +102,19 @@ The edge behaviour can be turned off in Settings; `⌥` + swipe keeps working. `
 
 Links opened in other apps (Claude, Slack, Mail) open in a new row at the top of the map, with that app's icon on the tab. Search the map for the app's name to find them, along with the tabs you opened from them. For this, make Tabmap the default browser: Settings (⌘,) → Make Default.
 
+## Passwords and passkeys
+
+- **Fill.** Click into a sign-in field and a pill under the island offers the logins saved for that site (subdomains count, so a login for `google.com` shows on `accounts.google.com`). Filling asks for Touch ID or your Mac password, then not again for five minutes. Each frame only ever gets logins for its own site, and only over https.
+- **Save.** After you sign in or change a password, the pill offers Save, Update, Never for This Site or Not Now. Two-step sign-ins (account on one page, password on the next) are saved with the account from the first page.
+- **Suggest.** In a new-password field the pill offers a strong password (`abcdEf-ghij2k-mnopqr` style). Using it saves it as soon as the form is sent.
+- **Where they live.** Logins are internet passwords in your Mac's login keychain, so Keychain Access shows them and the importer can add logins exported from Chrome, Safari or the Passwords app. Settings > Saved Passwords lists, reveals, copies and deletes them.
+
+What macOS does not allow a browser like this (as of macOS 26):
+
+- **iCloud Keychain passwords** cannot be read directly. There is no public API for it. Apple's own bridge (the helper behind the iCloud Passwords extension for Chrome and Firefox) only answers browsers on Apple's allow-list in [`apple/password-manager-resources`](https://github.com/apple/password-manager-resources/blob/main/quirks/web-browser-extension-distribution-information.json), which checks the bundle ID and the Developer ID team. Getting there needs a paid Apple Developer account, Developer ID signing, and a pull request to that list. Until then, export from the Passwords app (File > Export All Passwords) and import the file.
+- **Passkeys** in a WKWebView need Apple's `com.apple.developer.web-browser.public-key-credential` entitlement. The Account Holder of a paid Apple Developer account requests it on a dedicated form; Apple approves it by hand. Without it WebKit refuses every passkey request, so Tabmap tells sites there is no passkey support (most then show their password form) and, when a site asks for a passkey anyway, offers to finish that sign-in in Safari.
+- Once the entitlement is granted, build with `TABMAP_SIGN_IDENTITY="Developer ID Application: …" TABMAP_TEAM_ID=XXXXXXXXXX TABMAP_PROVISIONING_PROFILE=path/to/profile.provisionprofile scripts/make-app.sh`. The app then detects the entitlement, drops the fallback, and WebKit handles passkeys from iCloud Keychain, security keys and phones itself. The bundle ID in `scripts/Info.plist` must match the App ID the entitlement was granted for.
+
 ## Keyboard
 
 | Keys | Action |
@@ -133,4 +146,4 @@ State is saved to `~/Library/Application Support/Tabmap` (the map as `state.json
 
 ## Not built yet
 
-Find in page, private windows, multiple windows, and extensions.
+Private windows, multiple windows, and extensions.

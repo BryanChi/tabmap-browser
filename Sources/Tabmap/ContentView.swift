@@ -32,6 +32,7 @@ struct ContentView: View {
                     MapHUD()
                     AppDockPill()
                     FindIsland()
+                    PasswordIsland()
                 }
                 } // page column with tab bar
                 .coordinateSpace(name: TabBarBackButtonX.space)

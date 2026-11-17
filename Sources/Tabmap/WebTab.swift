@@ -39,6 +39,7 @@ final class WebTab: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelega
         config.preferences.isElementFullscreenEnabled = true
         EdgeProbe.shared.install(in: config)
         ContentBlocker.shared.install(in: config)
+        PasswordAutofill.shared.install(in: config)
         return config
     }
 
