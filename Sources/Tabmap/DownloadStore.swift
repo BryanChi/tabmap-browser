@@ -75,7 +75,8 @@ final class DownloadStore: NSObject, ObservableObject, WKDownloadDelegate {
         begin(download, tab: origin)
     }
 
-    private func begin(_ download: WKDownload, tab: TabID?) {
+    /// Starts tracking a download, credited to `tab`. Also used by the page's right-click menu.
+    func begin(_ download: WKDownload, tab: TabID?) {
         let browser = BrowserStore.shared
         let source = download.originalRequest?.url
         let mapTab = browser.map.tab(tab)

@@ -46,7 +46,7 @@ final class WebTab: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelega
     init(id: TabID, store: BrowserStore, configuration: WKWebViewConfiguration?, adopting: WKWebView? = nil) {
         self.id = id
         self.store = store
-        self.webView = adopting ?? WKWebView(frame: .zero, configuration: configuration ?? WebTab.makeConfiguration())
+        self.webView = adopting ?? PageWebView(frame: .zero, configuration: configuration ?? WebTab.makeConfiguration())
         super.init()
         webView.navigationDelegate = self
         webView.uiDelegate = self
