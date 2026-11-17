@@ -18,6 +18,7 @@ struct ContentView: View {
                 }
                 ZStack(alignment: .top) {
                     PageStage()
+                    ReaderLayer()
                     AppLayer()
                     Island()
                     MapHUD()

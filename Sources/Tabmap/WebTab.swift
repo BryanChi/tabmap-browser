@@ -38,6 +38,7 @@ final class WebTab: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelega
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
         config.preferences.isElementFullscreenEnabled = true
         EdgeProbe.shared.install(in: config)
+        PictureInPicture.prepare(config)
         return config
     }
 

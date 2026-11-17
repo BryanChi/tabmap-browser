@@ -46,6 +46,8 @@ final class PageRelay: ObservableObject {
 
 private struct IslandBody: View {
     @EnvironmentObject private var store: BrowserStore
+    @ObservedObject private var reader = ReaderController.shared
+    @ObservedObject private var pip = PictureInPicture.shared
     let mode: Island.Mode
     let page: IslandPage?
 
@@ -84,6 +86,9 @@ private struct IslandBody: View {
         .opacity(mode == .hidden ? 0 : 1)
         .allowsHitTesting(mode != .hidden)
         .animation(.spring(response: 0.36, dampingFraction: 0.76), value: mode)
+        .onChange(of: mode) { newMode in
+            if newMode == .full { pip.refreshFront() }
+        }
         .environment(\.colorScheme, .dark)
         .padding(.top, 7)
     }
@@ -137,6 +142,16 @@ private struct IslandBody: View {
                 .padding(.horizontal, 10)
                 .background(Capsule().fill(Color.white.opacity(0.1)))
 
+            if reader.canShow {
+                Button { reader.toggle() } label: {
+                    Image(systemName: reader.isShown ? "doc.plaintext.fill" : "doc.plaintext")
+                }
+                .help(reader.isShown ? "Hide Reader (⇧⌘R)" : "Show Reader (⇧⌘R)")
+            }
+            if pip.frontHasVideo {
+                Button { pip.toggleFront() } label: { Image(systemName: "pip.enter") }
+                    .help("Picture in Picture (⌥⌘P)")
+            }
             Button { store.sidebarShown.toggle() } label: {
                 Image(systemName: store.sidebarShown ? "sidebar.left" : "sidebar.leading")
             }

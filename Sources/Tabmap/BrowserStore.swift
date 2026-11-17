@@ -291,6 +291,7 @@ final class BrowserStore: ObservableObject {
         }
         syncAddress()
         scheduleSave()
+        PictureInPicture.shared.arrived(id)
     }
 
     /// Option+Cmd+arrows: move through the map without opening it.
@@ -300,6 +301,7 @@ final class BrowserStore: ObservableObject {
 
     private func leaveActiveTab() {
         guard let current = map.activeTabID else { return }
+        PictureInPicture.shared.leaving(current)
         captureSnapshot(current)
         saveSession(current)
     }

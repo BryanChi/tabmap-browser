@@ -31,6 +31,7 @@ struct TabmapApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @ObservedObject private var store = BrowserStore.shared
     @ObservedObject private var dock = AppDock.shared
+    @ObservedObject private var reader = ReaderController.shared
 
     var body: some Scene {
         Window("Tabmap", id: "main") {
@@ -69,6 +70,11 @@ struct TabmapApp: App {
                 Divider()
                 Button("Reload Page") { store.reload() }
                     .keyboardShortcut("r", modifiers: [.command])
+                Divider()
+                Button(reader.isShown ? "Hide Reader" : "Show Reader") { reader.toggle() }
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                Button("Picture in Picture") { PictureInPicture.shared.toggleFront() }
+                    .keyboardShortcut("p", modifiers: [.command, .option])
                 Divider()
             }
             CommandMenu("Go") {

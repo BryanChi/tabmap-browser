@@ -16,6 +16,7 @@ struct SettingsView: View {
     @AppStorage(GestureNavigator.edgeSwipeKey) private var edgeSwipe = true
     @AppStorage(MergeAdvisor.enabledKey) private var mergeSuggestions = true
     @AppStorage(BrowserStore.jumpToDuplicatesKey) private var jumpToDuplicates = true
+    @AppStorage(PictureInPicture.autoKey) private var autoPictureInPicture = true
 
     private static let sleepChoices: [Choice<TimeInterval>] = [
         Choice("5 minutes", 5 * 60), Choice("15 minutes", 15 * 60), Choice("30 minutes", 30 * 60),
@@ -74,6 +75,13 @@ struct SettingsView: View {
             Section {
                 Toggle("Go to the existing tab instead of opening a page twice", isOn: $jumpToDuplicates)
                 Text("Hold ⌥ when pressing Return in the address bar, or use Duplicate Tab (⇧⌘D), to get a copy anyway.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Section {
+                Toggle("Pop a playing video out when you leave its tab", isOn: $autoPictureInPicture)
+                Text("The video keeps playing in a small window on top of everything and goes back into the page when you return. Use ⌥⌘P to pop a video out yourself.")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
