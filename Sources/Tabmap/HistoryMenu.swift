@@ -6,8 +6,9 @@ import TabMapCore
 // The branching history, shown as a dropdown that falls from the island's back button
 // when it is right-clicked (or control-clicked). While it is open the back arrow turns to
 // point down at it. Each row is a page; the graph in the left gutter shows how they connect:
-// the straight line is the way to the page you are on, and side branches are detours you
-// backed out of, which a normal back list would have thrown away.
+// one straight line from where Forward leads, through the page you are on, back to the first
+// page. Pages you backed out of are never mixed into it: each side trip is folded into one row
+// just above the page it left from, and unfolds in its own lane.
 
 /// What the dropdown shows: a tree, and how to go to one of its pages.
 struct HistoryMenuModel {
@@ -74,14 +75,18 @@ struct HistoryMenu: View {
     /// Where the caret meets the panel, measured from the panel's leading edge.
     let caretX: CGFloat
 
-    @State private var highlighted: Int?
+    static let panelWidth: CGFloat = 380
+
+    @State private var highlighted: String?
+    /// Side trips the user has unfolded, by the id of their first page.
+    @State private var expanded: Set<Int> = []
     @State private var appeared = false
     @State private var keyMonitor: Any?
 
     private let rowHeight: CGFloat = 34
-    private let laneWidth: CGFloat = 12
+    private let laneWidth: CGFloat = 14
     private let gutterLeading: CGFloat = 18
-    private let width: CGFloat = 380
+    private var width: CGFloat { Self.panelWidth }
     private let maxListHeight: CGFloat = 440
     private let caretHeight: CGFloat = 7
 
@@ -105,34 +110,33 @@ struct HistoryMenu: View {
     }
 
     private func panel(_ model: HistoryMenuModel) -> some View {
-        let layout = model.tree.layout()
-        let rows = Self.rows(layout)
+        let rows = model.tree.menuRows(expanded: expanded)
+        let maxLane = rows.map(\.lane).max() ?? 0
+        let gutter = gutterLeading + CGFloat(maxLane) * laneWidth + 10
         let listHeight = min(CGFloat(rows.count) * rowHeight, maxListHeight)
-        let gutter = gutterLeading + CGFloat(max(layout.lanes - 1, 0)) * laneWidth + 10
 
         return VStack(alignment: .leading, spacing: 0) {
-            header(model, rows: rows)
+            header(model)
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: CGFloat(rows.count) * rowHeight > maxListHeight) {
                     ZStack(alignment: .topLeading) {
-                        graph(rows, onPath: false)
-                            .stroke(Color.white.opacity(0.22), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
-                        graph(rows, onPath: true)
+                        graph(rows, main: false)
+                            .stroke(Color.white.opacity(0.25), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round, dash: []))
+                        graph(rows, main: true)
                             .stroke(Color.white.opacity(0.6), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
                         VStack(spacing: 0) {
-                            ForEach(Array(rows.enumerated()), id: \.element.id) { index, placed in
-                                row(placed, index: index, model: model, gutter: gutter)
-                                    .id(placed.id)
+                            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                                rowView(row, index: index, model: model, gutter: gutter)
+                                    .id(row.id)
+                                    .transition(.opacity.combined(with: .offset(y: 10)))
                             }
                         }
                     }
                     .frame(width: width, height: CGFloat(rows.count) * rowHeight, alignment: .topLeading)
-                    .opacity(appeared ? 1 : 0)
-                    .animation(.easeOut(duration: 0.18).delay(0.04), value: appeared)
                 }
                 .frame(height: listHeight)
                 .onAppear {
-                    if let current = model.tree.currentID { proxy.scrollTo(current, anchor: .center) }
+                    if let current = model.tree.currentID { proxy.scrollTo("p\(current)", anchor: .center) }
                 }
                 .onChange(of: highlighted) { id in
                     if let id { proxy.scrollTo(id) }
@@ -148,17 +152,17 @@ struct HistoryMenu: View {
         .environment(\.colorScheme, .dark)
     }
 
-    private func header(_ model: HistoryMenuModel, rows: [PlacedHistoryNode]) -> some View {
-        let detours = rows.filter { !$0.onCurrentPath }.count
+    private func header(_ model: HistoryMenuModel) -> some View {
+        let folded = model.tree.menuRows().filter { if case .branch = $0.kind { return true } else { return false } }.count
         return HStack(spacing: 6) {
             Text("HISTORY")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(.white.opacity(0.45))
             Spacer()
-            if detours > 0 {
+            if folded > 0 {
                 Image(systemName: "arrow.triangle.branch")
                     .font(.system(size: 9, weight: .semibold))
-                Text(detours == 1 ? "1 page off the path" : "\(detours) pages off the path")
+                Text(folded == 1 ? "1 side trip" : "\(folded) side trips")
                     .font(.system(size: 10))
             }
         }
@@ -170,125 +174,166 @@ struct HistoryMenu: View {
 
     // MARK: Rows
 
-    /// Deepest pages at the top, so the list reads like time going up: what you went forward
-    /// to, then the page you are on, then the pages that led to it. Within one depth, the main
-    /// line comes before the detours.
-    static func rows(_ layout: HistoryLayout) -> [PlacedHistoryNode] {
-        layout.nodes.sorted { a, b in
-            if a.column != b.column { return a.column > b.column }
-            return a.lane < b.lane
-        }
-    }
-
     private func laneX(_ lane: Int) -> CGFloat { gutterLeading + CGFloat(lane) * laneWidth }
 
-    private func row(_ placed: PlacedHistoryNode, index: Int, model: HistoryMenuModel, gutter: CGFloat) -> some View {
-        let node = model.tree.node(placed.id)
-        let isHighlighted = highlighted == placed.id
-        return HStack(spacing: 10) {
+    @ViewBuilder
+    private func rowView(_ row: HistoryMenuRow, index: Int, model: HistoryMenuModel, gutter: CGFloat) -> some View {
+        let isHighlighted = highlighted == row.id
+        let content = HStack(spacing: 10) {
             Color.clear.frame(width: gutter)
-            FaviconView(url: node?.url, size: 16)
-                .opacity(placed.onCurrentPath ? 1 : 0.6)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(node?.displayTitle ?? "")
-                    .font(.system(size: 12.5, weight: placed.isCurrent ? .semibold : .regular))
-                    .foregroundColor(.white.opacity(placed.onCurrentPath ? 0.95 : 0.6))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Text(subtitle(node, placed))
-                    .font(.system(size: 10.5))
-                    .foregroundColor(.white.opacity(0.4))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer(minLength: 8)
-            if placed.isCurrent {
-                Text("Now")
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(Color.accentColor))
-                    .foregroundColor(.white)
+            switch row.kind {
+            case .page(let id):
+                pageContent(row, node: model.tree.node(id))
+            case .branch(let start, let pages, let open):
+                branchContent(first: model.tree.node(start), pages: pages, open: open)
             }
         }
         .padding(.trailing, 14)
         .frame(width: width, height: rowHeight)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(rowFill(placed, highlighted: isHighlighted))
+                .fill(rowFill(row, highlighted: isHighlighted))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 1)
         )
         .overlay(alignment: .topLeading) {
-            dot(placed).position(x: laneX(placed.lane), y: rowHeight / 2)
+            dot(row).position(x: laneX(row.lane), y: rowHeight / 2)
         }
         .contentShape(Rectangle())
         .onHover { inside in
-            if inside { highlighted = placed.id } else if highlighted == placed.id { highlighted = nil }
+            if inside { highlighted = row.id } else if highlighted == row.id { highlighted = nil }
         }
-        .onTapGesture { choose(placed.id, model) }
-        .contextMenu {
-            if let node {
-                Button("Go to This Page") { choose(placed.id, model) }
-                if let tab = model.tab {
-                    Button("Open in a New Tab Beside This One") {
-                        store.closeHistoryMenu()
-                        store.openChild(of: tab, url: node.url, activate: true)
-                    }
-                }
-                Divider()
-                Button("Copy Address") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(node.url.absoluteString, forType: .string)
-                }
-            }
-        }
-        .help(node?.url.absoluteString ?? "")
+        .onTapGesture { activate(row, model) }
         // Rows slide down into place one after another as the menu opens.
         .opacity(appeared ? 1 : 0)
         .offset(y: appeared ? 0 : -10)
         .animation(.spring(response: 0.36, dampingFraction: 0.82).delay(Double(min(index, 14)) * 0.018), value: appeared)
+
+        if case .page(let id) = row.kind, let node = model.tree.node(id) {
+            content
+                .contextMenu {
+                    Button("Go to This Page") { activate(row, model) }
+                    if let tab = model.tab {
+                        Button("Open in a New Tab Beside This One") {
+                            store.closeHistoryMenu()
+                            store.openChild(of: tab, url: node.url, activate: true)
+                        }
+                    }
+                    Divider()
+                    Button("Copy Address") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(node.url.absoluteString, forType: .string)
+                    }
+                }
+                .help(node.url.absoluteString)
+        } else {
+            content
+        }
     }
 
-    private func rowFill(_ placed: PlacedHistoryNode, highlighted: Bool) -> Color {
+    private func pageContent(_ row: HistoryMenuRow, node: HistoryNode?) -> some View {
+        let strong = row.onCurrentPath || row.isAhead
+        return HStack(spacing: 10) {
+            FaviconView(url: node?.url, size: 16)
+                .opacity(strong ? 1 : 0.65)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(node?.displayTitle ?? "")
+                    .font(.system(size: 12.5, weight: row.isCurrent ? .semibold : .regular))
+                    .foregroundColor(.white.opacity(row.onCurrentPath ? 0.95 : (row.isAhead ? 0.7 : 0.6)))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(subtitle(node, row))
+                    .font(.system(size: 10.5))
+                    .foregroundColor(.white.opacity(0.4))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            if row.isCurrent {
+                Text("Now")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.accentColor))
+                    .foregroundColor(.white)
+            } else if row.isAhead {
+                Text("Forward")
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundColor(.white.opacity(0.4))
+            }
+        }
+    }
+
+    /// A folded side trip: how many pages, and where it started.
+    private func branchContent(first: HistoryNode?, pages: Int, open: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .bold))
+                .rotationEffect(.degrees(open ? 90 : 0))
+                .foregroundColor(.white.opacity(0.5))
+                .frame(width: 16)
+            Group {
+                Text(pages == 1 ? "1 page you left" : "\(pages) pages you left")
+                    .foregroundColor(.white.opacity(0.7))
+                + Text(open ? "" : "  ·  \(first?.displayTitle ?? "")")
+                    .foregroundColor(.white.opacity(0.4))
+            }
+            .font(.system(size: 11.5))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func rowFill(_ row: HistoryMenuRow, highlighted: Bool) -> Color {
         if highlighted { return Color.white.opacity(0.12) }
-        if placed.isCurrent { return Color.accentColor.opacity(0.22) }
+        if row.isCurrent { return Color.accentColor.opacity(0.22) }
         return .clear
     }
 
     @ViewBuilder
-    private func dot(_ placed: PlacedHistoryNode) -> some View {
-        if placed.isCurrent {
-            Circle()
-                .fill(Color.accentColor)
-                .frame(width: 9, height: 9)
-                .overlay(Circle().stroke(Color.accentColor.opacity(0.4), lineWidth: 3).padding(-2.5))
-        } else if placed.onCurrentPath {
-            Circle().fill(Color.white.opacity(0.85)).frame(width: 7, height: 7)
-        } else {
+    private func dot(_ row: HistoryMenuRow) -> some View {
+        switch row.kind {
+        case .branch:
+            // A fold is a hollow ring, so it reads as "more in here".
             Circle()
                 .fill(Color.black)
-                .frame(width: 7, height: 7)
-                .overlay(Circle().stroke(Color.white.opacity(0.45), lineWidth: 1.5))
+                .frame(width: 9, height: 9)
+                .overlay(Circle().stroke(Color.white.opacity(0.45), style: StrokeStyle(lineWidth: 1.5, dash: [2, 1.6])))
+        case .page:
+            if row.isCurrent {
+                Circle()
+                    .fill(Color.accentColor)
+                    .frame(width: 9, height: 9)
+                    .overlay(Circle().stroke(Color.accentColor.opacity(0.4), lineWidth: 3).padding(-2.5))
+            } else if row.onCurrentPath {
+                Circle().fill(Color.white.opacity(0.85)).frame(width: 7, height: 7)
+            } else {
+                Circle()
+                    .fill(Color.black)
+                    .frame(width: 7, height: 7)
+                    .overlay(Circle().stroke(Color.white.opacity(row.isAhead ? 0.6 : 0.45), lineWidth: 1.5))
+            }
         }
     }
 
-    /// Lines from each page down to the page it came from. A detour runs down its own lane,
-    /// then bends left into its parent's dot.
-    private func graph(_ rows: [PlacedHistoryNode], onPath: Bool) -> Path {
-        var index: [Int: Int] = [:]
-        for (i, n) in rows.enumerated() { index[n.id] = i }
+    /// Each row's line runs down to the row it came from. Within a lane it is straight; where a
+    /// side trip leaves the main line it bends right out of the page it left from.
+    private func graph(_ rows: [HistoryMenuRow], main: Bool) -> Path {
+        var index: [String: Int] = [:]
+        for (i, r) in rows.enumerated() { index[r.id] = i }
         var path = Path()
-        for (i, n) in rows.enumerated() where n.onCurrentPath == onPath {
-            guard let parentID = n.parent, let j = index[parentID] else { continue }
-            let parent = rows[j]
-            let from = CGPoint(x: laneX(n.lane), y: (CGFloat(i) + 0.5) * rowHeight)
-            let to = CGPoint(x: laneX(parent.lane), y: (CGFloat(j) + 0.5) * rowHeight)
+        for (i, row) in rows.enumerated() where (row.lane == 0 && !row.inBranch) == main {
+            guard let link = row.link, let j = index[link] else { continue }
+            let target = rows[j]
+            let from = CGPoint(x: laneX(row.lane), y: (CGFloat(i) + 0.5) * rowHeight)
+            let to = CGPoint(x: laneX(target.lane), y: (CGFloat(j) + 0.5) * rowHeight)
             path.move(to: from)
-            if n.lane == parent.lane {
+            if row.lane == target.lane {
                 path.addLine(to: to)
             } else {
-                let r = min(8, (to.y - from.y) / 2, (from.x - to.x) / 2)
+                // Down the side lane, then a rounded turn into the parent's dot.
+                let r = min(8, (to.y - from.y) / 2, abs(from.x - to.x))
                 path.addLine(to: CGPoint(x: from.x, y: to.y - r))
                 path.addQuadCurve(to: CGPoint(x: from.x - r, y: to.y), control: CGPoint(x: from.x, y: to.y))
                 path.addLine(to: to)
@@ -303,23 +348,50 @@ struct HistoryMenu: View {
         return f
     }()
 
-    private func subtitle(_ node: HistoryNode?, _ placed: PlacedHistoryNode) -> String {
+    private func subtitle(_ node: HistoryNode?, _ row: HistoryMenuRow) -> String {
         guard let node else { return "" }
         var host = node.url.host ?? node.url.absoluteString
         if host.hasPrefix("www.") { host.removeFirst(4) }
-        if placed.isCurrent { return host }
+        if row.isCurrent { return host }
         let when = Self.relative.localizedString(for: node.visitedAt, relativeTo: Date())
         return "\(host) · \(when)"
     }
 
-    private func choose(_ id: Int, _ model: HistoryMenuModel) {
-        store.closeHistoryMenu()
-        model.open(id)
+    // MARK: Acting on rows
+
+    private func activate(_ row: HistoryMenuRow, _ model: HistoryMenuModel) {
+        switch row.kind {
+        case .page(let id):
+            store.closeHistoryMenu()
+            model.open(id)
+        case .branch(let start, _, let open):
+            setExpanded(start, !open)
+        }
+    }
+
+    private func setExpanded(_ start: Int, _ open: Bool) {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+            if open {
+                expanded.insert(start)
+            } else {
+                // Folding a side trip folds everything opened inside it too.
+                expanded.remove(start)
+                if let tree = store.historyMenuModel()?.tree {
+                    expanded = expanded.filter { !isInside($0, start, tree) }
+                }
+                highlighted = "b\(start)"
+            }
+        }
+    }
+
+    private func isInside(_ id: Int, _ ancestor: Int, _ tree: HistoryTree) -> Bool {
+        tree.ancestors(of: id).contains(ancestor)
     }
 
     // MARK: Keys
 
-    /// Esc closes; up and down move the highlight; Return goes to the highlighted page.
+    /// Esc closes; up and down move the highlight; right unfolds a side trip and left folds the
+    /// one you are in; Return goes to the highlighted page or toggles the highlighted fold.
     private func installKeys() {
         guard keyMonitor == nil else { return }
         // Local monitors run on the main thread, and the closure inherits the view's main-actor isolation.
@@ -333,21 +405,36 @@ struct HistoryMenu: View {
 
     private func handleKey(_ event: NSEvent) -> NSEvent? {
         guard store.historyMenuShown, let model = store.historyMenuModel() else { return event }
-        let rows = Self.rows(model.tree.layout()).map(\.id)
-        let current = highlighted ?? model.tree.currentID
-        let position = current.flatMap { rows.firstIndex(of: $0) }
+        let rows = model.tree.menuRows(expanded: expanded)
+        let ids = rows.map(\.id)
+        let current = highlighted ?? model.tree.currentID.map { "p\($0)" }
+        let position = current.flatMap { ids.firstIndex(of: $0) }
+        let row = position.map { rows[$0] }
         switch event.keyCode {
         case 53: // escape
             store.closeHistoryMenu()
             return nil
         case 126: // up
-            if let position { highlighted = rows[max(position - 1, 0)] } else { highlighted = rows.first }
+            highlighted = position.map { ids[max($0 - 1, 0)] } ?? ids.first
             return nil
         case 125: // down
-            if let position { highlighted = rows[min(position + 1, rows.count - 1)] } else { highlighted = rows.first }
+            highlighted = position.map { ids[min($0 + 1, ids.count - 1)] } ?? ids.first
+            return nil
+        case 124: // right
+            if let row, case .branch(let start, _, false) = row.kind { setExpanded(start, true) }
+            return nil
+        case 123: // left
+            guard let row else { return nil }
+            if case .branch(let start, _, true) = row.kind {
+                setExpanded(start, false)
+            } else if row.inBranch {
+                // Fold the innermost open side trip this row belongs to.
+                let chain = [row.node] + model.tree.ancestors(of: row.node)
+                if let start = chain.first(where: { expanded.contains($0) }) { setExpanded(start, false) }
+            }
             return nil
         case 36, 76: // return, enter
-            if let highlighted { choose(highlighted, model) }
+            if let row { activate(row, model) }
             return nil
         default:
             return event

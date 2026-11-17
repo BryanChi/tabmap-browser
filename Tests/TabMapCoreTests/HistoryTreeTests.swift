@@ -139,4 +139,73 @@ final class HistoryTreeTests: XCTestCase {
         let e = grown.visit(url: u("e"), now: at(9))
         XCTAssertNil(tree.node(e), "ids must not be reused after a reload")
     }
+
+    // MARK: Menu rows
+
+    func ids(_ rows: [HistoryMenuRow]) -> [String] { rows.map(\.id) }
+
+    func testMenuKeepsTheMainLineStraightAndFoldsTheDetour() {
+        let (tree, a, b, _, d) = makeDetour()
+        let rows = tree.menuRows()
+        // Top to bottom: current page, the folded side trip that left from a, then a.
+        XCTAssertEqual(ids(rows), ["p\(d)", "b\(b)", "p\(a)"])
+        XCTAssertEqual(rows[1].kind, .branch(start: b, pages: 2, expanded: false))
+        XCTAssertEqual(rows[1].lane, 1)
+        XCTAssertEqual(rows[1].link, "p\(a)")
+        XCTAssertEqual(rows[0].link, "p\(a)", "the main line runs past the fold to its own parent")
+        XCTAssertTrue(rows[0].isCurrent)
+    }
+
+    func testExpandingADetourShowsItsPagesInTheirOwnLane() {
+        let (tree, a, b, c, d) = makeDetour()
+        let rows = tree.menuRows(expanded: [b])
+        XCTAssertEqual(ids(rows), ["p\(d)", "p\(c)", "p\(b)", "b\(b)", "p\(a)"])
+        XCTAssertEqual(rows[1].lane, 1)
+        XCTAssertEqual(rows[2].link, "b\(b)")
+        XCTAssertEqual(rows[1].link, "p\(b)")
+        XCTAssertTrue(rows[1].inBranch)
+        XCTAssertFalse(rows[1].onCurrentPath)
+    }
+
+    func testPagesAheadOfTheCurrentOneSitAboveIt() {
+        var (tree, a, _, _, d) = makeDetour()
+        tree.move(to: a, now: at(5))
+        let rows = tree.menuRows()
+        XCTAssertEqual(rows.first?.id, "p\(d)")
+        XCTAssertTrue(rows.first?.isAhead == true)
+        XCTAssertTrue(rows.last?.isCurrent == true)
+    }
+
+    func testMainLineNeverInterleavesBranches() {
+        // A long main line with a side trip off its middle: main line rows must stay in order.
+        var tree = HistoryTree()
+        let p0 = tree.visit(url: u("p0"), now: at(0))
+        let p1 = tree.visit(url: u("p1"), now: at(1))
+        tree.visit(url: u("x0"), now: at(2))
+        tree.visit(url: u("x1"), now: at(3))
+        tree.move(to: p1, now: at(4))
+        let p2 = tree.visit(url: u("p2"), now: at(5))
+        let p3 = tree.visit(url: u("p3"), now: at(6))
+        let main = tree.menuRows().filter { $0.lane == 0 }.map(\.node)
+        XCTAssertEqual(main, [p3, p2, p1, p0])
+        XCTAssertEqual(tree.menuRows().count, 5)
+    }
+
+    func testNestedDetourFoldsAgainInsideAnOpenOne() {
+        var tree = HistoryTree()
+        let a = tree.visit(url: u("a"), now: at(0))
+        let b = tree.visit(url: u("b"), now: at(1))
+        tree.visit(url: u("c"), now: at(2))
+        tree.move(to: b, now: at(3))
+        let e = tree.visit(url: u("e"), now: at(4))
+        tree.move(to: a, now: at(5))
+        tree.visit(url: u("d"), now: at(6))
+        // b -> e is b's preferred line (newer); c is a side trip inside the side trip.
+        let rows = tree.menuRows(expanded: [b])
+        let fold = rows.first { if case .branch = $0.kind { return $0.lane == 2 } else { return false } }
+        XCTAssertNotNil(fold)
+        XCTAssertEqual(rows.first { $0.id == "p\(e)" }?.lane, 1)
+        XCTAssertEqual(tree.subtreeSize(b), 3)
+    }
 }
+
