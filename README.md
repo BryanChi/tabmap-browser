@@ -78,6 +78,14 @@ There is no title bar and no toolbar: the page fills the whole window.
 
 The edge behaviour can be turned off in Settings; `⌥` + swipe keeps working. `⌥⌘` + arrow keys slide between tabs the same way, and give a small nudge when there is no tab in that direction.
 
+## Downloads
+
+- **Badge on the tab.** Each download is tied to the tab it came from. That tab gets a small badge with the number of files, in the sidebar and in the full map. A link that opens an empty window just for the file puts the badge on the tab the link was on.
+- **Search by file name.** In the map search (`⌘E`), typing part of a file's name finds the tab it was downloaded from.
+- **List grouped by row.** `⌥⌘L` (or the pill at the top right) shows every download under the row its tab is in. Right-click a tab for the files from that tab only.
+- **Back to the source tab.** From the list, jump to the tab a file came from (it reopens if it was closed) or show the file in Finder. Drop a downloaded file on Tabmap's Dock icon to go to the page it came from.
+- Files are saved to `~/Downloads`, with the address and page recorded in Finder's "Where from".
+
 ## Keyboard
 
 | Keys | Action |
@@ -92,6 +100,7 @@ The edge behaviour can be turned off in Settings; `⌥` + swipe keeps working. `
 | `⇧⌘T` | Reopen the last closed tab |
 | `⇧⌘P` | Pin or unpin the tab |
 | `⇧⌘S` | Pin the map sidebar open, or unpin it |
+| `⌥⌘L` | Show or hide the downloads list |
 | `⌘[` `⌘]` `⌘R` | Back, forward, reload |
 
 In the full map: type to search open and closed tabs and group names, arrows to move, Return to open, `⌘⌫` to close the selected tab, Esc to dismiss.
@@ -105,4 +114,4 @@ State is saved to `~/Library/Application Support/Tabmap` (the map as `state.json
 
 ## Not built yet
 
-Downloads, find in page, private windows, multiple windows, bookmarks, extensions, and being set as the default browser.
+Find in page, private windows, multiple windows, bookmarks, extensions, and being set as the default browser.

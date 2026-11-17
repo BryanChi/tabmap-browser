@@ -12,6 +12,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         BrowserStore.shared.persistEverything()
+        DownloadStore.shared.saveNow()
+    }
+
+    /// A file dropped on the Dock icon: go to the page it was downloaded from.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where url.isFileURL { DownloadStore.shared.goToSource(ofFile: url) }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -54,6 +60,8 @@ struct TabmapApp: App {
             CommandGroup(after: .sidebar) {
                 Button("Show Tab Map") { store.toggleOverview() }
                     .keyboardShortcut("e", modifiers: [.command])
+                Button("Downloads") { DownloadStore.shared.togglePanel() }
+                    .keyboardShortcut("l", modifiers: [.command, .option])
                 Button(store.sidebarShown ? "Unpin Map Sidebar" : "Pin Map Sidebar Open") {
                     store.sidebarShown.toggle()
                 }

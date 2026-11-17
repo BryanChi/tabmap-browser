@@ -108,6 +108,7 @@ final class WebTab: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelega
             NSWorkspace.shared.open(url)
             return .cancel
         }
+        if navigationAction.shouldPerformDownload { return .download }
         return .allow
     }
 

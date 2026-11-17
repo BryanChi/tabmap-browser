@@ -435,7 +435,7 @@ final class BrowserStore: ObservableObject {
     }
 
     private func overviewRows() -> [[TabID]] {
-        let layout = map.layout(matching: overviewQuery)
+        let layout = mapLayout(matching: overviewQuery)
         // Only the tabs the rows draw: closed tabs behind a row's "+N" button are skipped.
         let open = layout.open.map { trail -> [TabID] in
             let parts = TrailRow.parts(of: trail, archived: false)

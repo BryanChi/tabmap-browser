@@ -25,7 +25,7 @@ struct TabMapView: View {
     var selection: TabID?
 
     var body: some View {
-        let layout = store.map.layout(matching: query)
+        let layout = store.mapLayout(matching: query)
         let now = Date()
         let sections = Self.sections(layout.open, map: store.map, now: now)
 
@@ -197,6 +197,7 @@ struct TrailRow: View {
 
     private func placed(_ tab: MapTab, acceptsDrops: Bool) -> some View {
         cell(tab)
+            .overlay(alignment: .topTrailing) { DownloadBadge(tabID: tab.id, style: style) }
             .tabDragDrop(tab: tab, cornerRadius: style == .cards ? 8 : 6, acceptsDrops: acceptsDrops)
             .modifier(SplitMarker(tab: tab, trail: trail, style: style))
             .id(tab.id)
@@ -266,6 +267,7 @@ struct TrailRow: View {
             Divider()
             Button("Close Tab") { store.closeTab(tab.id) }
         }
+        DownloadMenuItems(tabID: tab.id)
     }
 
     private func tooltip(_ tab: MapTab) -> String {

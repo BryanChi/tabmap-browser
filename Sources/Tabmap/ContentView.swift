@@ -26,6 +26,8 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .zIndex(1)
+            DownloadsLayer()
+                .zIndex(2)
         }
         .overlay(alignment: .leading) {
             ZStack(alignment: .leading) {
