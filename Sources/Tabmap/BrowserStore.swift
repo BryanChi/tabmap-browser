@@ -185,7 +185,16 @@ final class BrowserStore: ObservableObject {
     }
 
     /// A link opened from `parent` (cmd-click). Lands to the parent's right.
+    /// When the page is already in the map: with `activate`, go to it instead; in the background,
+    /// skip the copy only if the page is already open in this row.
     func openChild(of parent: TabID, url: URL, activate: Bool) {
+        if jumpToDuplicates {
+            if activate, let existing = map.duplicate(of: url, from: parent) {
+                choose(existing)
+                return
+            }
+            if !activate, map.duplicate(of: url, from: parent, scope: .openTabsInTrail) != nil { return }
+        }
         guard let id = map.openChild(of: parent, url: url, now: Date(), activate: false) else { return }
         ensureLoaded(id)
         if activate { self.activate(id, commit: true) }
@@ -206,11 +215,36 @@ final class BrowserStore: ObservableObject {
     /// Return in the address field.
     func submitAddress() {
         guard let url = AddressInterpreter.url(from: addressText, searchTemplate: map.settings.searchTemplate) else { return }
-        open(url)
+        // Option+Return opens the page even if it is already in the map.
+        let copy = NSApp.currentEvent?.modifierFlags.contains(.option) == true
+        open(url, allowDuplicate: copy)
+    }
+
+    static let jumpToDuplicatesKey = "jumpToDuplicates"
+
+    /// Opening a page that is already in the map goes to that tab. Off means always open a copy.
+    var jumpToDuplicates: Bool {
+        UserDefaults.standard.object(forKey: Self.jumpToDuplicatesKey) as? Bool ?? true
+    }
+
+    /// A deliberate copy of the current tab, to its right.
+    func duplicateActiveTab() {
+        guard let active = map.activeTabID, let url = map.activeTab?.url, map.activeTab?.isBlank == false else { return }
+        leaveActiveTab()
+        guard let id = map.openChild(of: active, url: url, now: Date(), activate: false) else { return }
+        ensureLoaded(id)
+        activate(id, commit: true)
+        scheduleSave()
     }
 
     /// Loads `url` in the current tab, or in a new row when there is no current tab.
-    func open(_ url: URL) {
+    func open(_ url: URL, allowDuplicate: Bool = false) {
+        if !allowDuplicate, jumpToDuplicates,
+           let existing = map.duplicate(of: url, from: AppDock.shared.isFront ? nil : map.activeTabID) {
+            // Going there from a blank tab discards the blank, so nothing is left behind.
+            choose(existing)
+            return
+        }
         let now = Date()
         let id: TabID
         if AppDock.shared.isFront {

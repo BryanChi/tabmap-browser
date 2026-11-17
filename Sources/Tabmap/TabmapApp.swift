@@ -41,6 +41,8 @@ struct TabmapApp: App {
                     .keyboardShortcut("t", modifiers: [.command])
                 Button("New Tab in This Trail") { store.newTabInTrail() }
                     .keyboardShortcut("t", modifiers: [.command, .option])
+                Button("Duplicate Tab") { store.duplicateActiveTab() }
+                    .keyboardShortcut("d", modifiers: [.command, .shift])
                 Button("Open Location") { store.focusAddress() }
                     .keyboardShortcut("l", modifiers: [.command])
                 Divider()

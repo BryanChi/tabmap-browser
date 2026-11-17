@@ -15,6 +15,7 @@ struct SettingsView: View {
     @EnvironmentObject private var store: BrowserStore
     @AppStorage(GestureNavigator.edgeSwipeKey) private var edgeSwipe = true
     @AppStorage(MergeAdvisor.enabledKey) private var mergeSuggestions = true
+    @AppStorage(BrowserStore.jumpToDuplicatesKey) private var jumpToDuplicates = true
 
     private static let sleepChoices: [Choice<TimeInterval>] = [
         Choice("5 minutes", 5 * 60), Choice("15 minutes", 15 * 60), Choice("30 minutes", 30 * 60),
@@ -69,6 +70,13 @@ struct SettingsView: View {
                 Text("With this off, hold ⌥ while swiping with two fingers to move between tabs.")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
+            }
+            Section {
+                Toggle("Go to the existing tab instead of opening a page twice", isOn: $jumpToDuplicates)
+                Text("Hold ⌥ when pressing Return in the address bar, or use Duplicate Tab (⇧⌘D), to get a copy anyway.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Section {
                 Toggle("Suggest joining rows that are about the same thing", isOn: $mergeSuggestions)
