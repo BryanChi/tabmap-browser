@@ -53,7 +53,7 @@ final class FindController: ObservableObject {
 
     private func handleKey(_ event: NSEvent) -> Bool {
         let store = BrowserStore.shared
-        guard !store.overviewShown, let webView = pageView, event.window === webView.window else { return false }
+        guard !store.overviewShown, !BookmarkStore.shared.boardShown, let webView = pageView, event.window === webView.window else { return false }
         let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
         let key = event.charactersIgnoringModifiers?.lowercased()
 

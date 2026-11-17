@@ -16,6 +16,8 @@ struct SettingsView: View {
     @AppStorage(GestureNavigator.edgeSwipeKey) private var edgeSwipe = true
     @AppStorage(MergeAdvisor.enabledKey) private var mergeSuggestions = true
     @AppStorage(BrowserStore.jumpToDuplicatesKey) private var jumpToDuplicates = true
+    @AppStorage(BookmarkStore.hotCornerKey) private var bookmarkCorner = BookmarkStore.HotCorner.off.rawValue
+    @AppStorage(BookmarkStore.watchKey) private var watchBookmarks = true
 
     private static let sleepChoices: [Choice<TimeInterval>] = [
         Choice("5 minutes", 5 * 60), Choice("15 minutes", 15 * 60), Choice("30 minutes", 30 * 60),
@@ -84,6 +86,17 @@ struct SettingsView: View {
                 Text(MergeAdvisor.modelAvailable
                      ? "Rows are compared on this Mac by Apple Intelligence. Nothing is joined until you press Join."
                      : "Rows are compared on this Mac by their page titles and sites. Nothing is joined until you press Join.")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Section {
+                Picker("Show bookmarks when the pointer rests in a corner", selection: $bookmarkCorner) {
+                    ForEach(BookmarkStore.HotCorner.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                Toggle("Check saved pages for changes once a day", isOn: $watchBookmarks)
+                Text(BookmarkStore.shared.filer.modelAvailable
+                     ? "Bookmarks are filed and tagged on this Mac by Apple Intelligence. Checking for changes fetches each saved page without your cookies."
+                     : "Bookmarks are filed and tagged on this Mac from their site and words. Checking for changes fetches each saved page without your cookies.")
                     .font(.system(size: 11)).foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

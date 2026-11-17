@@ -234,6 +234,7 @@ final class GestureNavigator {
     // MARK: Scroll events
 
     func handleScroll(_ event: NSEvent) -> NSEvent? {
+        if BookmarkStore.shared.boardShown { return event }
         // The app dock claims swipes that start at the bottom edge; map swipes are off while an app is in front.
         if AppDock.shared.handleScroll(event) { return nil }
         if AppDock.shared.isFront { return event }
@@ -544,6 +545,7 @@ final class GestureNavigator {
 
     /// Three-finger swipe, when the system is set to send it. It arrives already finished.
     func handleSwipe(_ event: NSEvent) -> NSEvent? {
+        if BookmarkStore.shared.boardShown { return event }
         if AppDock.shared.isFront { return event }
         guard let window = store.window, event.window === window, !store.overviewShown else { return event }
         if event.deltaX > 0 { animateMove(.right) }
@@ -595,6 +597,7 @@ final class GestureNavigator {
     private var settingOverviewFlag = false
 
     func handleMagnify(_ event: NSEvent) -> NSEvent? {
+        if BookmarkStore.shared.boardShown { return event }
         // A pinch on a link peek belongs to the app dock; the map zoom is off while an app is in front.
         if AppDock.shared.handleMagnify(event) { return nil }
         if AppDock.shared.isFront { return event }

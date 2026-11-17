@@ -122,6 +122,7 @@ final class BrowserStore: ObservableObject {
         window.isMovableByWindowBackground = false
         updateWindowButtons()
         AppDock.shared.start(window: window)
+        BookmarkStore.shared.start(window: window)
     }
 
     /// The island shows in full: the pointer is at the top, the address is being edited, or there is no page.
@@ -451,7 +452,7 @@ final class BrowserStore: ObservableObject {
     }
 
     private func handleOverviewKey(_ event: NSEvent) -> NSEvent? {
-        guard overviewShown else { return event }
+        guard overviewShown, !BookmarkStore.shared.boardShown else { return event }
         let command = event.modifierFlags.contains(.command)
         switch event.keyCode {
         case 53: // escape
@@ -779,6 +780,7 @@ final class BrowserStore: ObservableObject {
         persistence.saveMap(map)
         AppDock.shared.saveNow()
         HistoryStore.shared.saveNow()
+        BookmarkStore.shared.saveNow()
     }
 
     // MARK: App dock
@@ -839,5 +841,33 @@ private extension TabMap {
         let wasBlank = activeTab?.isBlank == true
         openRoot(url: nil, now: now, activate: true)
         return wasBlank ? previous : nil
+    }
+}
+
+// MARK: Bookmarks
+
+extension BrowserStore {
+    /// Opens pages as a new row at the top of the map, left to right, and shows the first.
+    /// The others load when you go to them.
+    func openTrail(_ urls: [URL]) {
+        guard let first = urls.first else { return }
+        AppDock.shared.sendToBack()
+        leaveActiveTab()
+        let now = Date()
+        let previous = map.activeTabID
+        let wasBlank = map.activeTab?.isBlank == true
+        let root = map.openRoot(url: first, now: now, activate: true)
+        if wasBlank, let previous, previous != root { dropPage(previous, forget: true) }
+        var parent = root
+        for url in urls.dropFirst() {
+            if let id = map.openChild(of: parent, url: url, now: now, activate: false) { parent = id }
+        }
+        ensureLoaded(root)
+        map.touch(root, now: now)
+        dwellTask?.cancel()
+        if overviewShown { overviewShown = false }
+        syncAddress()
+        focusPage()
+        scheduleSave()
     }
 }

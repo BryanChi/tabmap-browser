@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         BrowserStore.shared.persistEverything()
         DownloadStore.shared.saveNow()
+        BookmarkStore.shared.saveNow()
     }
 
     /// A file dropped on the Dock icon: go to the page it was downloaded from.
@@ -98,6 +99,15 @@ struct TabmapApp: App {
                 Button(store.map.activeTab?.pinned == true ? "Unpin Tab" : "Pin Tab (Never Auto-Close)") {
                     if let id = store.map.activeTabID { store.togglePin(id) }
                 }
+            }
+            CommandMenu("Bookmarks") {
+                Button("Bookmark This Page") { BookmarkStore.shared.bookmarkFrontPage() }
+                    .keyboardShortcut("d", modifiers: [.command])
+                Button("Bookmark This Row") { BookmarkStore.shared.bookmarkCurrentRow() }
+                    .keyboardShortcut("b", modifiers: [.command, .shift])
+                Divider()
+                Button("Show Bookmarks") { BookmarkStore.shared.toggleBoard() }
+                    .keyboardShortcut("b", modifiers: [.command])
             }
         }
 

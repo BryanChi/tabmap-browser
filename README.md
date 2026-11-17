@@ -86,6 +86,18 @@ The edge behaviour can be turned off in Settings; `⌥` + swipe keeps working. `
 - **Back to the source tab.** From the list, jump to the tab a file came from (it reopens if it was closed) or show the file in Finder. Drop a downloaded file on Tabmap's Dock icon to go to the page it came from.
 - Files are saved to `~/Downloads`, with the address and page recorded in Finder's "Where from".
 
+## Bookmarks
+
+- **One key to save.** `⌘D` saves the page in front with a picture of it. A note at the top right says Bookmarked, then which collection it was filed in and its tags.
+- **Highlights.** Text selected on the page when you press `⌘D` is saved with the bookmark as a highlight; on a page already saved, `⌘D` with a selection adds another. Clicking a highlight on the board opens the page scrolled to that passage.
+- **Saved rows.** `⇧⌘B` saves the whole row: its open pages in order, its name and description. Opening it brings it back as a new row.
+- **The board.** `⌘B` (or Esc to close) shows every bookmark as a card, with smart views and your collections down the side. Drag a card onto a collection to file it there; Edit… changes its title, tags and collection, and File Automatically puts the automatic choice back.
+- **Search by anything.** The board's search looks at titles, addresses, tags, notes, highlights, the text of the page itself and its main colours ("blue").
+- **Filed for you.** New bookmarks are filed and tagged on this Mac by Apple Intelligence when it is available, otherwise from their site and words. Nothing leaves this Mac.
+- **Hot corner.** In Settings, pick a corner of the window (bottom right works best): resting the pointer there opens the board, and again closes it.
+- **Changes and dead links.** Once a day, saved pages are fetched (without your cookies) to see whether they changed or are gone. A page that is gone shows the copy saved when you bookmarked it.
+- Everything stays in `~/Library/Application Support/Tabmap/bookmarks`.
+
 ## Keyboard
 
 | Keys | Action |
@@ -101,6 +113,9 @@ The edge behaviour can be turned off in Settings; `⌥` + swipe keeps working. `
 | `⇧⌘P` | Pin or unpin the tab |
 | `⇧⌘S` | Pin the map sidebar open, or unpin it |
 | `⌥⌘L` | Show or hide the downloads list |
+| `⌘D` | Bookmark the page (with the selected text as a highlight) |
+| `⇧⌘B` | Bookmark the whole row |
+| `⌘B` | Show or hide the bookmark board |
 | `⌘[` `⌘]` `⌘R` | Back, forward, reload |
 
 In the full map: type to search open and closed tabs and group names, arrows to move, Return to open, `⌘⌫` to close the selected tab, Esc to dismiss.
@@ -114,4 +129,4 @@ State is saved to `~/Library/Application Support/Tabmap` (the map as `state.json
 
 ## Not built yet
 
-Find in page, private windows, multiple windows, bookmarks, extensions, and being set as the default browser.
+Find in page, private windows, multiple windows, extensions, and being set as the default browser.
