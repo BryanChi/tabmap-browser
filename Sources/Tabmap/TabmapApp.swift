@@ -43,6 +43,7 @@ struct TabmapApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @ObservedObject private var store = BrowserStore.shared
     @ObservedObject private var dock = AppDock.shared
+    @ObservedObject private var blocker = ContentBlocker.shared
 
     var body: some Scene {
         Window("Tabmap", id: "main") {
@@ -82,6 +83,11 @@ struct TabmapApp: App {
                 Divider()
                 Button("Reload Page") { store.reload() }
                     .keyboardShortcut("r", modifiers: [.command])
+                Button(blocker.isBlocking(on: store.frontURL) || !blocker.enabled
+                       ? "Allow Ads and Trackers on This Site" : "Block Ads and Trackers on This Site") {
+                    blocker.toggleSite(of: store.frontURL)
+                }
+                .disabled(!blocker.enabled || store.frontURL?.host == nil)
                 Divider()
             }
             CommandMenu("Go") {

@@ -38,6 +38,7 @@ final class WebTab: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelega
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
         config.preferences.isElementFullscreenEnabled = true
         EdgeProbe.shared.install(in: config)
+        ContentBlocker.shared.install(in: config)
         return config
     }
 
@@ -112,6 +113,8 @@ final class WebTab: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelega
             NSWorkspace.shared.open(url)
             return .cancel
         }
+        // Ad and tracker blocking on or off for the site this tab is about to show.
+        if navigationAction.targetFrame?.isMainFrame == true { ContentBlocker.shared.prepare(webView, for: url) }
         if navigationAction.shouldPerformDownload { return .download }
         return .allow
     }
@@ -143,6 +146,7 @@ final class WebTab: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelega
         // Cancelled loads and loads handed off elsewhere are not failures.
         if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorCancelled { return }
         if ns.domain == "WebKitErrorDomain", ns.code == 102 { return }
+        if ns.domain == "WebKitErrorDomain", ns.code == 104 { showBlockedByContentBlocker(ns); return }
         let failing = (ns.userInfo[NSURLErrorFailingURLStringErrorKey] as? String) ?? ""
         let html = """
         <html><head><meta name="viewport" content="width=device-width">

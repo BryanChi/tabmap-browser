@@ -122,6 +122,8 @@ private struct IslandBody: View {
                     .help("Reload")
             }
 
+            BlockingShield(url: store.frontURL)
+
             NativeTextField(
                 text: $store.addressText,
                 placeholder: "Search or enter address",

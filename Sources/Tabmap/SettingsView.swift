@@ -80,6 +80,7 @@ struct SettingsView: View {
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }
+            ContentBlockingSettings()
             Section {
                 Toggle("Go to the existing tab instead of opening a page twice", isOn: $jumpToDuplicates)
                 Text("Hold ⌥ when pressing Return in the address bar, or use Duplicate Tab (⇧⌘D), to get a copy anyway.")
