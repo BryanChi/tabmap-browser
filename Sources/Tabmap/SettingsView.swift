@@ -16,6 +16,7 @@ struct SettingsView: View {
     @AppStorage(GestureNavigator.edgeSwipeKey) private var edgeSwipe = true
     @AppStorage(MergeAdvisor.enabledKey) private var mergeSuggestions = true
     @AppStorage(BrowserStore.jumpToDuplicatesKey) private var jumpToDuplicates = true
+    @ObservedObject private var visits = VisitStore.shared
 
     private static let sleepChoices: [Choice<TimeInterval>] = [
         Choice("5 minutes", 5 * 60), Choice("15 minutes", 15 * 60), Choice("30 minutes", 30 * 60),
@@ -86,6 +87,20 @@ struct SettingsView: View {
                      : "Rows are compared on this Mac by their page titles and sites. Nothing is joined until you press Join.")
                     .font(.system(size: 11)).foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            Section {
+                HStack {
+                    Button("Import from Another Browser…") { BrowserImporter.shared.show() }
+                    Button("Import Exported Files…") { BrowserImporter.shared.chooseFiles() }
+                }
+                HStack {
+                    Text("The address bar finishes addresses from \(visits.index.count.formatted()) pages in your history.")
+                        .font(.system(size: 11)).foregroundColor(.secondary)
+                    Spacer()
+                    Button("Forget") { visits.forgetAll() }
+                        .controlSize(.small)
+                        .disabled(visits.index.count == 0)
+                }
             }
         }
         .padding(20)

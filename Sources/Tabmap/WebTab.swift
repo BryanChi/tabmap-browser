@@ -119,6 +119,7 @@ final class WebTab: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelega
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         syncMeta()
+        VisitStore.shared.record(webView.url, title: webView.title)
         store?.tabDidFinishLoading(id)
     }
 

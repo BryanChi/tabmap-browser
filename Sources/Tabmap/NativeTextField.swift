@@ -15,6 +15,9 @@ struct NativeTextField: NSViewRepresentable {
     var onSubmit: () -> Void = {}
     var onCancel: () -> Void = {}
     var onFocusChange: (Bool) -> Void = { _ in }
+    /// Finishes what is being typed: given the typed text, the whole text to show, or nil. The added part is
+    /// shown selected, so typing on replaces it, Delete removes it, and Return or → accepts it.
+    var complete: ((String) -> String?)? = nil
 
     final class Field: NSTextField {
         var onBecomeFirstResponder: (() -> Void)?
@@ -43,6 +46,8 @@ struct NativeTextField: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: NativeTextField
         var lastFocusToken: Int
+        /// Set by a delete key just before the text changes, so deleting does not bring a completion back.
+        private var deleting = false
 
         init(_ parent: NativeTextField) {
             self.parent = parent
@@ -51,7 +56,21 @@ struct NativeTextField: NSViewRepresentable {
 
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSTextField else { return }
-            parent.text = field.stringValue
+            let text = field.stringValue
+            let wasDeleting = deleting
+            deleting = false
+            // Only with the caret at the end after typing, and not while an input method is composing.
+            if !wasDeleting, let complete = parent.complete, let editor = field.currentEditor() as? NSTextView,
+               editor.selectedRange().location == (text as NSString).length,
+               editor.selectedRange().length == 0, editor.markedRange().length == 0,
+               let full = complete(text), full.count > text.count, full.lowercased().hasPrefix(text.lowercased()) {
+                let typedLength = (text as NSString).length
+                editor.string = full
+                editor.setSelectedRange(NSRange(location: typedLength, length: (full as NSString).length - typedLength))
+                parent.text = full
+                return
+            }
+            parent.text = text
         }
 
         func controlTextDidEndEditing(_ notification: Notification) {
@@ -68,6 +87,7 @@ struct NativeTextField: NSViewRepresentable {
                 parent.onCancel()
                 return true
             default:
+                if NSStringFromSelector(selector).hasPrefix("delete") { deleting = true }
                 return false
             }
         }

@@ -29,6 +29,8 @@ struct ContentView: View {
             .zIndex(1)
             DownloadsLayer()
                 .zIndex(2)
+            ImportLayer()
+                .zIndex(6)
         }
         .overlay(alignment: .leading) {
             ZStack(alignment: .leading) {

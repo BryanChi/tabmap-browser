@@ -132,7 +132,8 @@ private struct IslandBody: View {
                 onFocusChange: { focused in
                     // Not during the view update that may have caused it.
                     Task { @MainActor in store.addressEditing = focused }
-                })
+                },
+                complete: { VisitStore.shared.completion(for: $0) })
                 .frame(height: 26)
                 .padding(.horizontal, 10)
                 .background(Capsule().fill(Color.white.opacity(0.1)))

@@ -57,6 +57,10 @@ struct TabmapApp: App {
                 Button("Reopen Closed Tab") { store.reopenLastClosed() }
                     .keyboardShortcut("t", modifiers: [.command, .shift])
             }
+            CommandGroup(after: .importExport) {
+                Button("Import from Another Browser…") { BrowserImporter.shared.show() }
+                Button("Import Exported Files…") { BrowserImporter.shared.chooseFiles() }
+            }
             CommandGroup(after: .sidebar) {
                 Button("Show Tab Map") { store.toggleOverview() }
                     .keyboardShortcut("e", modifiers: [.command])

@@ -122,6 +122,7 @@ final class BrowserStore: ObservableObject {
         window.isMovableByWindowBackground = false
         updateWindowButtons()
         AppDock.shared.start(window: window)
+        BrowserImporter.shared.offerOnFirstLaunch()
     }
 
     /// The island shows in full: the pointer is at the top, the address is being edited, or there is no page.
@@ -217,6 +218,7 @@ final class BrowserStore: ObservableObject {
         guard let url = AddressInterpreter.url(from: addressText, searchTemplate: map.settings.searchTemplate) else { return }
         // Option+Return opens the page even if it is already in the map.
         let copy = NSApp.currentEvent?.modifierFlags.contains(.option) == true
+        if url.host != nil { VisitStore.shared.markTyped(url) }
         open(url, allowDuplicate: copy)
     }
 
@@ -779,6 +781,7 @@ final class BrowserStore: ObservableObject {
         persistence.saveMap(map)
         AppDock.shared.saveNow()
         HistoryStore.shared.saveNow()
+        VisitStore.shared.saveNow()
     }
 
     // MARK: App dock

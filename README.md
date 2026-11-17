@@ -86,6 +86,23 @@ The edge behaviour can be turned off in Settings; `⌥` + swipe keeps working. `
 - **Back to the source tab.** From the list, jump to the tab a file came from (it reopens if it was closed) or show the file in Finder. Drop a downloaded file on Tabmap's Dock icon to go to the page it came from.
 - Files are saved to `~/Downloads`, with the address and page recorded in Finder's "Where from".
 
+## Importing from another browser
+
+On first launch, if Chrome, Arc, Brave, Edge, Vivaldi or Safari is on the Mac, a card offers to bring in bookmarks and
+history (File > Import from Another Browser, or Settings, shows it again).
+
+- Chromium browsers are read straight from each profile's folder; pick which profiles.
+- Safari's folder is behind Full Disk Access. Either allow it (the card's Allow… button opens the setting) or use
+  Safari's File > Export Browsing Data and choose the .zip with File > Import Exported Files.
+- Bookmarks go to the bookmark board. A bookmark's outermost folder becomes its collection and deeper folders become
+  tags; bookmarks outside folders are filed by site and words. Pages already saved are skipped.
+- History fills `~/Library/Application Support/Tabmap/visits.json`, which also records pages visited in Tabmap. The
+  address bar finishes what you type from it ("gi" becomes "github.com"); Delete drops the suggestion. Settings can
+  forget it.
+- Passwords come only from export files (.csv from Chrome, Safari, the Passwords app, Firefox or most password
+  managers). They are saved to the login keychain as internet passwords, which the autofill reads. Tabmap then offers
+  to move the plain-text file to the Trash. It never decrypts another browser's password store.
+
 ## Keyboard
 
 | Keys | Action |
