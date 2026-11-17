@@ -22,6 +22,7 @@ struct ContentView: View {
                     Island()
                     MapHUD()
                     AppDockPill()
+                    FindIsland()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
