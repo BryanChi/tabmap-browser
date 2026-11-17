@@ -23,6 +23,7 @@ struct ContentView: View {
                     MapHUD()
                     AppDockPill()
                     FindIsland()
+                    PasswordIsland()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

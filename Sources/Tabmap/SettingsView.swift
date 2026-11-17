@@ -87,6 +87,7 @@ struct SettingsView: View {
                     .font(.system(size: 11)).foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            PasswordSettingsSection()
         }
         .padding(20)
         .frame(width: 460)
