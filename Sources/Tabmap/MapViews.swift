@@ -179,7 +179,6 @@ struct TrailRow: View {
                     }
                     .padding(style == .cards ? 8 : 4)
                 }
-                HistoryStrip(trail: trail, style: style, selection: selection)
             }
             .background(
                 RoundedRectangle(cornerRadius: style == .cards ? 14 : 9)

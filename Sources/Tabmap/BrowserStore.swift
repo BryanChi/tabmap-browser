@@ -37,6 +37,8 @@ final class BrowserStore: ObservableObject {
         }
     }
     /// The address field is being edited.
+    /// The branching history is dropping down from the back button. Keeps the island open.
+    @Published var historyMenuShown = false { didSet { updateWindowButtons() } }
     @Published var addressEditing = false {
         didSet {
             guard addressEditing != oldValue else { return }
@@ -126,7 +128,7 @@ final class BrowserStore: ObservableObject {
 
     /// The island shows in full: the pointer is at the top, the address is being edited, or there is no page.
     var chromeExpanded: Bool {
-        if chromeHover || addressEditing { return true }
+        if chromeHover || addressEditing || historyMenuShown { return true }
         // A dock app in front always has a page, whatever the map's own tab is.
         if AppDock.shared.isFront { return false }
         return map.activeTab == nil || map.activeTab?.isBlank == true
