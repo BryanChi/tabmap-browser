@@ -34,7 +34,15 @@ final class PictureInPicture: ObservableObject {
         if config.preferences.responds(to: NSSelectorFromString("_setAllowsPictureInPictureMediaPlayback:")) {
             config.preferences.setValue(true, forKey: "allowsPictureInPictureMediaPlayback")
         }
+        // The button that appears on a video when the pointer is over it. In every frame, so
+        // embedded players (a YouTube video in an article) get it too; in our own script world,
+        // so pages cannot see or break it.
+        let script = WKUserScript(source: videoButtonScript, injectionTime: .atDocumentEnd,
+                                  forMainFrameOnly: false, in: buttonWorld)
+        config.userContentController.addUserScript(script)
     }
+
+    private static let buttonWorld = WKContentWorld.world(name: "TabmapPiPButton")
 
     // MARK: Actions
 
@@ -79,6 +87,117 @@ final class PictureInPicture: ObservableObject {
             Task { @MainActor in done(reply) }
         }
     }
+
+    /// A small black round button in the top right corner of the video under the pointer. Clicking
+    /// it is a real click in the page, so WebKit lets the video go into picture in picture.
+    private static let videoButtonScript = #"""
+    (() => {
+    if (window.__tabmapPiPButton) return;
+    window.__tabmapPiPButton = true;
+    const MIN_W = 200, MIN_H = 120, INSET = 10, SIZE = 30;
+
+    const host = document.createElement("div");
+    host.style.cssText = "all:initial;position:fixed;z-index:2147483647;top:0;left:0;width:0;height:0;pointer-events:none;";
+    const root = host.attachShadow({ mode: "closed" });
+    root.innerHTML = `<style>
+      button{all:initial;position:fixed;box-sizing:border-box;width:${SIZE}px;height:${SIZE}px;border-radius:50%;
+        background:rgba(0,0,0,.72);border:1px solid rgba(255,255,255,.18);box-shadow:0 2px 10px rgba(0,0,0,.35);
+        display:flex;align-items:center;justify-content:center;cursor:pointer;pointer-events:auto;
+        opacity:0;transform:scale(.8);transition:opacity .15s ease-out,transform .15s ease-out;
+        -webkit-backdrop-filter:blur(10px)}
+      button.on{opacity:1;transform:scale(1)}
+      button:hover{background:rgba(0,0,0,.9)}
+      svg{width:16px;height:16px;display:block}
+    </style><button title="Picture in Picture" aria-label="Picture in Picture"><svg viewBox="0 0 16 16" fill="none" stroke="white" stroke-width="1.4">
+      <rect x="1.5" y="2.5" width="13" height="11" rx="2"/><rect x="8" y="8" width="5" height="3.8" rx="1" fill="white" stroke="none"/></svg></button>`;
+    const button = root.querySelector("button");
+    let target = null, hideTimer = 0, attached = false;
+
+    const inPiP = (v) => document.pictureInPictureElement === v
+      || (v.webkitPresentationMode && v.webkitPresentationMode === "picture-in-picture");
+    const attach = () => {
+      if (attached && host.isConnected) return;
+      (document.body || document.documentElement).appendChild(host);
+      attached = true;
+    };
+    const place = () => {
+      if (!target || !target.isConnected) return hide();
+      const r = target.getBoundingClientRect();
+      if (r.width < MIN_W || r.height < MIN_H || r.bottom < 0 || r.top > innerHeight) return hide();
+      const top = Math.max(r.top, 0) + INSET;
+      const left = Math.min(r.right, innerWidth) - INSET - SIZE;
+      button.style.top = top + "px";
+      button.style.left = left + "px";
+      button.title = inPiP(target) ? "Back to the page" : "Picture in Picture";
+    };
+    const show = (v) => {
+      clearTimeout(hideTimer);
+      if (document.fullscreenElement || document.webkitFullscreenElement) return hide();
+      attach();
+      target = v;
+      place();
+      button.classList.add("on");
+      hideTimer = setTimeout(hide, 2500);
+    };
+    const hide = () => {
+      clearTimeout(hideTimer);
+      button.classList.remove("on");
+      target = null;
+    };
+    const videoAt = (x, y) => {
+      for (const el of document.elementsFromPoint(x, y)) {
+        if (el.tagName === "VIDEO") return el;
+      }
+      return null;
+    };
+
+    let pending = false;
+    addEventListener("mousemove", (e) => {
+      // Over the button itself (events from inside our closed shadow root arrive retargeted to the host).
+      if (e.target === host) { clearTimeout(hideTimer); return; }
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(() => {
+        pending = false;
+        const v = videoAt(e.clientX, e.clientY);
+        if (!v) { if (target) hideTimer = setTimeout(hide, 400); return; }
+        const r = v.getBoundingClientRect();
+        if (r.width >= MIN_W && r.height >= MIN_H) show(v);
+      });
+    }, { passive: true, capture: true });
+    addEventListener("scroll", () => { if (target) place(); }, { passive: true, capture: true });
+    addEventListener("resize", () => { if (target) place(); }, { passive: true });
+    button.addEventListener("mouseenter", () => clearTimeout(hideTimer));
+    button.addEventListener("mouseleave", () => { hideTimer = setTimeout(hide, 800); });
+
+    // Keep the page's own click handlers (play/pause on click) from seeing clicks on the button.
+    for (const type of ["mousedown", "mouseup", "pointerdown", "pointerup", "dblclick"]) {
+      button.addEventListener(type, (e) => { e.stopPropagation(); }, true);
+    }
+    button.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const v = target;
+      if (!v) return;
+      hide();
+      if (inPiP(v)) {
+        if (document.pictureInPictureElement === v && document.exitPictureInPicture) {
+          try { await document.exitPictureInPicture(); return; } catch (err) {}
+        }
+        if (v.webkitSetPresentationMode) v.webkitSetPresentationMode("inline");
+        return;
+      }
+      v.removeAttribute("disablepictureinpicture");
+      try { v.disablePictureInPicture = false; } catch (err) {}
+      if (v.requestPictureInPicture && document.pictureInPictureEnabled !== false) {
+        try { await v.requestPictureInPicture(); return; } catch (err) {}
+      }
+      if (v.webkitSupportsPresentationMode && v.webkitSupportsPresentationMode("picture-in-picture")) {
+        v.webkitSetPresentationMode("picture-in-picture");
+      }
+    }, true);
+    })();
+    """#
 
     // Body of an async function. Argument: action ("probe" | "toggle" | "auto-out" | "auto-in").
     private static let script = #"""
