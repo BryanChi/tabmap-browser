@@ -69,6 +69,12 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Section {
+                Toggle("Show a tab bar with the current row's tabs", isOn: $store.tabBarShown)
+                Text("Like Safari's compact tabs: tabs share the width and shrink as the row grows. Click the current tab to type an address.")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Section {
                 Toggle("Swipe past the edge of a page to move through the map", isOn: $edgeSwipe)
                 Text("With this off, hold ⌥ while swiping with two fingers to move between tabs.")
                     .font(.system(size: 11))

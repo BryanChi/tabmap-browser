@@ -78,6 +78,7 @@ struct TabmapApp: App {
                     store.sidebarShown.toggle()
                 }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
+                Button(store.tabBarShown ? "Hide Tab Bar" : "Show Tab Bar") { store.tabBarShown.toggle() }
                 Divider()
                 Button("Reload Page") { store.reload() }
                     .keyboardShortcut("r", modifiers: [.command])
@@ -97,6 +98,11 @@ struct TabmapApp: App {
                     .keyboardShortcut(.upArrow, modifiers: [.command, .option])
                 Button("Trail Below") { store.move(.down) }
                     .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                Divider()
+                ForEach(1..<10) { number in
+                    Button(number == 9 ? "Last Tab in Row" : "Tab \(number) in Row") { store.selectTabInRow(number) }
+                        .keyboardShortcut(KeyEquivalent(Character(String(number))), modifiers: [.control])
+                }
                 Divider()
                 Button(dock.isFront ? "Move App Back to the Map" : "Keep Tab in Dock") {
                     dock.toggleDockForFront()

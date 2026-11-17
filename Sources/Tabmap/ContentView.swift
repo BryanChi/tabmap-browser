@@ -16,6 +16,12 @@ struct ContentView: View {
                     Divider()
                         .modifier(FadesIntoOverview())
                 }
+                VStack(spacing: 0) {
+                if store.tabBarShown {
+                    TabBar()
+                        .modifier(FadesIntoOverview())
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
                 ZStack(alignment: .top) {
                     PageStage()
                     AppLayer()
@@ -24,6 +30,8 @@ struct ContentView: View {
                     AppDockPill()
                     FindIsland()
                 }
+                } // page column with tab bar
+                .animation(.spring(response: 0.32, dampingFraction: 0.86), value: store.tabBarShown)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .zIndex(1)

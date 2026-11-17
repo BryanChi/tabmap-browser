@@ -22,6 +22,14 @@ final class BrowserStore: ObservableObject {
             updateWindowButtons()
         }
     }
+    /// The optional Safari-style tab bar along the top, showing the current row's tabs (TabBar.swift).
+    @Published var tabBarShown = UserDefaults.standard.bool(forKey: "tabBarShown") {
+        didSet {
+            UserDefaults.standard.set(tabBarShown, forKey: "tabBarShown")
+            if tabBarShown { chromeHover = false }
+            updateWindowButtons()
+        }
+    }
     @Published var overviewShown = false {
         didSet {
             updateWindowButtons()
@@ -122,6 +130,7 @@ final class BrowserStore: ObservableObject {
         window.isMovableByWindowBackground = false
         updateWindowButtons()
         AppDock.shared.start(window: window)
+        TabBarChrome.shared.attach(window)
         BookmarkStore.shared.start(window: window)
     }
 
@@ -136,7 +145,7 @@ final class BrowserStore: ObservableObject {
     /// Close, minimise and zoom only show while some chrome is showing.
     private func updateWindowButtons() {
         guard let window else { return }
-        let shown = chromeExpanded || sidebarShown || overviewShown
+        let shown = chromeExpanded || sidebarShown || overviewShown || tabBarShown
         for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
             window.standardWindowButton(kind)?.isHidden = !shown
         }
@@ -508,7 +517,7 @@ final class BrowserStore: ObservableObject {
     private func handleMouseMoved(_ event: NSEvent) -> NSEvent? {
         guard let window, event.window === window, let content = window.contentView else { return event }
         let point = event.locationInWindow
-        if content.frame.height - point.y <= 5, !chromeHover {
+        if content.frame.height - point.y <= 5, !tabBarShown, !chromeHover {
             chromeHover = true
         }
         if point.x <= 3, !sidebarShown, !overviewShown, !sidebarPeek {

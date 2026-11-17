@@ -27,7 +27,9 @@ struct Island: View {
     private func mode(_ page: IslandPage?) -> Mode {
         if store.overviewShown { return .hidden }
         if store.chromeExpanded { return .full }
-        return page?.isLoading == true ? .loading : .hidden
+        // With the tab bar on, loading shows in the tab instead (unless a dock app is in front).
+        let loadingShowsInBar = store.tabBarShown && AppDock.shared.frontPage == nil
+        return page?.isLoading == true && !loadingShowsInBar ? .loading : .hidden
     }
 }
 
