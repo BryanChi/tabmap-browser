@@ -34,7 +34,7 @@ struct TabMapView: View {
                 VStack(alignment: .leading, spacing: style == .cards ? 10 : 5) {
                     bandLabel(section.band.label)
                     ForEach(section.trails) { trail in
-                        labelled(trail) {
+                        labelled(trail, archived: false) {
                             TrailRow(trail: trail, style: style, archived: false, selection: selection)
                         }
                     }
@@ -44,7 +44,7 @@ struct TabMapView: View {
             if !layout.archived.isEmpty {
                 horizon
                 ForEach(layout.archived) { trail in
-                    labelled(trail) {
+                    labelled(trail, archived: true) {
                         TrailRow(trail: trail, style: style, archived: true, selection: selection)
                     }
                 }
@@ -62,14 +62,13 @@ struct TabMapView: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.86), value: layout.archived.map(\.id))
     }
 
-    /// The row's generated name (and, in the overview, its summary) just above the row.
-    private func labelled<Row: View>(_ trail: Trail, @ViewBuilder row: () -> Row) -> some View {
-        VStack(alignment: .leading, spacing: style == .cards ? 4 : 2) {
-            if let name = trail.name, !name.isEmpty {
-                trailLabel(name: name, summary: trail.summary)
-            }
-            row()
+    /// The row's name (and, in the overview, its summary) just above the row, with the row's controls on hover.
+    private func labelled<Row: View>(_ trail: Trail, archived: Bool, @ViewBuilder row: @escaping () -> Row) -> some View {
+        var label: AnyView?
+        if let name = trail.name, !name.isEmpty {
+            label = AnyView(trailLabel(name: name, summary: trail.summary))
         }
+        return RowFrame(trail: trail, style: style, archived: archived, label: label, row: row)
     }
 
     @ViewBuilder
@@ -456,6 +455,7 @@ struct MapSidebar: View {
             AppDockStrip()
 
             MergeSuggestionBanner(advisor: store.mergeAdvisor, compact: true)
+            RowClosedBanner(compact: true)
             ScrollView(.vertical) {
                 TabMapView(style: .chips)
                     .padding(.horizontal, 8)
@@ -488,7 +488,7 @@ struct MapOverview: View {
                                 fontSize: 16,
                                 focusOnAppear: true)
                     .frame(height: 22)
-                Text("arrows to move · return to open · ⌘⌫ to close · esc to dismiss")
+                Text("arrows to move · return to open · ⌘W to close · esc to dismiss")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
                     .fixedSize()
@@ -499,6 +499,7 @@ struct MapOverview: View {
             .background(WindowDragArea())
             Divider()
             if store.overviewQuery.isEmpty { MergeSuggestionBanner(advisor: store.mergeAdvisor, compact: false) }
+            RowClosedBanner(compact: false)
             AppDockOverviewRow()
 
             ScrollViewReader { proxy in

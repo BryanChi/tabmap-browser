@@ -278,6 +278,7 @@ public struct TabMap: Codable, Equatable {
     @discardableResult
     public mutating func setLabel(trail id: TrailID, name: String, summary: String, signature: String) -> Bool {
         guard let i = trails.firstIndex(where: { $0.id == id }),
+              trails[i].namedByHand != true,
               trails[i].pageTabs.count >= 2,
               trails[i].contentSignature == signature
         else { return false }
@@ -291,7 +292,7 @@ public struct TabMap: Codable, Equatable {
     @discardableResult
     public mutating func clearStaleLabels() -> Bool {
         var changed = false
-        for i in trails.indices where trails[i].pageTabs.count < 2 {
+        for i in trails.indices where trails[i].pageTabs.count < 2 && trails[i].namedByHand != true {
             if trails[i].name != nil || trails[i].summary != nil || trails[i].labelSignature != nil {
                 trails[i].name = nil
                 trails[i].summary = nil

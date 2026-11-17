@@ -69,6 +69,10 @@ public struct Trail: Codable, Identifiable, Equatable {
     public var summary: String?
     /// The `contentSignature` the name and summary were generated for.
     public var labelSignature: String?
+    /// The person named this row; automatic naming leaves it alone.
+    public var namedByHand: Bool?
+    /// A star or other emoji the person put on the row so it stands out. Nil when unmarked.
+    public var mark: String?
 
     public init(id: TrailID = TrailID(), tabs: [MapTab]) {
         self.id = id
@@ -98,13 +102,13 @@ public struct Trail: Codable, Identifiable, Equatable {
 
     /// The row is big enough to name and its name was made for different pages (or never made).
     public var needsLabel: Bool {
-        pageTabs.count >= 2 && labelSignature != contentSignature
+        namedByHand != true && pageTabs.count >= 2 && labelSignature != contentSignature
     }
 
     /// True when every word of `query` appears somewhere in the row's name and summary.
     public func labelMatches(_ query: String) -> Bool {
         let words = TextMatch.words(query)
-        let text = [name, summary].compactMap { $0 }.joined(separator: " ")
+        let text = [mark, name, summary].compactMap { $0 }.joined(separator: " ")
         guard !words.isEmpty, !text.isEmpty else { return false }
         return words.allSatisfy { TextMatch.contains(text, $0) }
     }

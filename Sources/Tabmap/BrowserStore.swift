@@ -199,6 +199,19 @@ final class BrowserStore: ObservableObject {
         }
     }
 
+    /// The "+" on a row's header: a blank tab in that row (reusing one already there), made current
+    /// with the address field ready.
+    func newTab(inRow trail: TrailID) {
+        var target = map.openBlank(inTrail: trail)
+        if target == nil, let parent = map.newTabParent(inTrail: trail) {
+            target = map.openChild(of: parent, url: nil, now: Date(), activate: false)
+        }
+        guard let id = target else { return }
+        activate(id, commit: true)
+        if overviewShown { GestureNavigator.shared.closeOverview(showing: id) }
+        addressFocusRequest += 1
+    }
+
     /// A link opened from `parent` (cmd-click). Lands to the parent's right.
     /// When the page is already in the map: with `activate`, go to it instead; in the background,
     /// skip the copy only if the page is already open in this row.
@@ -355,6 +368,8 @@ final class BrowserStore: ObservableObject {
     }
 
     func reopenLastClosed() {
+        // A whole row closed from its header comes back as a row.
+        if RowControls.shared.reopenRowIfLatest() { return }
         leaveActiveTab()
         guard let id = map.reopenLastClosed(now: Date()) else { return }
         ensureLoaded(id)
@@ -399,6 +414,11 @@ final class BrowserStore: ObservableObject {
         guard map.undoMerge(record) else { return false }
         scheduleSave()
         return true
+    }
+
+    /// Row controls (RowControls.swift) change the map through here. `change` returns true if it changed anything.
+    func editMap(_ change: (inout TabMap) -> Bool) {
+        if change(&map) { scheduleSave() }
     }
 
     // MARK: Page controls
@@ -483,6 +503,8 @@ final class BrowserStore: ObservableObject {
 
     private func handleOverviewKey(_ event: NSEvent) -> NSEvent? {
         guard overviewShown, !BookmarkStore.shared.boardShown else { return event }
+        // Typing a row's new name: its field gets the keys.
+        if RowControls.shared.renaming != nil { return event }
         let command = event.modifierFlags.contains(.command)
         switch event.keyCode {
         case 53: // escape
@@ -502,6 +524,9 @@ final class BrowserStore: ObservableObject {
             return nil
         case 124 where overviewQuery.isEmpty && !command:
             overviewSelection = GridNav.move(from: overviewSelection, .right, in: overviewRows())
+            return nil
+        case 13 where command && !event.modifierFlags.contains(.shift): // cmd-W
+            RowControls.shared.closeFromOverview()
             return nil
         case 51 where command: // cmd-delete closes the selected tab
             if let selection = overviewSelection, map.tab(selection)?.isClosed == false {
@@ -672,6 +697,11 @@ final class BrowserStore: ObservableObject {
             sleepUnlessPlaying(id)
         }
         if !result.isEmpty { scheduleSave() }
+    }
+
+    /// "Sleep Row": unloads the row's pages, except what is on screen and anything playing.
+    func sleepRow(_ trail: TrailID) {
+        for id in map.tabsToSleep(inTrail: trail, loaded: loadedIDs) { sleepUnlessPlaying(id) }
     }
 
     /// Puts a page to sleep unless it is playing audio or video right now.

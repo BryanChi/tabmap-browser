@@ -204,10 +204,15 @@ final class BookmarkStore: ObservableObject {
     }
 
     /// ⇧⌘B: saves the open pages of the current row as one bookmark, with the row's name.
-    func bookmarkCurrentRow() {
+    /// With `trailID` (the row header's bookmark button) it saves that row instead.
+    func bookmarkCurrentRow(_ trailID: TrailID? = nil) {
         let browser = BrowserStore.shared
         let map = browser.map
-        guard let active = map.activeTabID, let location = map.locate(active) else {
+        let picked = trailID.flatMap { id in map.trails.first { $0.id == id } }
+        let pickedTab = picked.flatMap { row in
+            row.openTabs.first { $0.id == row.lastActiveTabID }?.id ?? row.openTabs.first?.id
+        }
+        guard let active = trailID == nil ? map.activeTabID : pickedTab, let location = map.locate(active) else {
             showToast(.nothingToSave, nil)
             return
         }
@@ -221,7 +226,7 @@ final class BookmarkStore: ObservableObject {
             return
         }
         // A row of one page is just a page.
-        if pages.count == 1 {
+        if pages.count == 1, trailID == nil {
             bookmarkFrontPage()
             return
         }
