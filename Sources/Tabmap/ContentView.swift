@@ -4,6 +4,8 @@ import TabMapCore
 
 struct ContentView: View {
     @EnvironmentObject private var store: BrowserStore
+    /// The tab bar's back arrow, across the page column; the history dropdown hangs from it.
+    @State private var tabBarBackX: CGFloat = 0
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -26,11 +28,14 @@ struct ContentView: View {
                     PageStage()
                     AppLayer()
                     Island()
+                    TabBarHistoryDrop(backX: tabBarBackX)
                     MapHUD()
                     AppDockPill()
                     FindIsland()
                 }
                 } // page column with tab bar
+                .coordinateSpace(name: TabBarBackButtonX.space)
+                .onPreferenceChange(TabBarBackButtonX.self) { tabBarBackX = $0 }
                 .animation(.spring(response: 0.32, dampingFraction: 0.86), value: store.tabBarShown)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

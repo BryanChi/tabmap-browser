@@ -21,7 +21,16 @@ struct Island: View {
         let page: IslandPage?
         if let front = dock.frontPage { page = front } else { page = store.activeWebTab }
         relay.follow(page)
-        return IslandBody(mode: mode(page), page: page)
+        return ZStack(alignment: .top) {
+            // While the history menu is open, a click anywhere else closes it, like a menu.
+            if store.historyMenuShown {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .onTapGesture { store.closeHistoryMenu() }
+            }
+            IslandBody(mode: mode(page), page: page)
+        }
     }
 
     private func mode(_ page: IslandPage?) -> Mode {
@@ -88,7 +97,23 @@ private struct IslandBody: View {
         .animation(.spring(response: 0.36, dampingFraction: 0.76), value: mode)
         .environment(\.colorScheme, .dark)
         .padding(.top, 7)
+        // The branching history drops down from the back button, its caret under the arrow.
+        .overlay(alignment: .topLeading) {
+            // With the tab bar on, it drops from the bar's back button instead (see TabBarHistoryDrop).
+            if store.historyMenuShown && isFull && !store.tabBarShown {
+                HistoryMenu(caretX: backButtonCenter)
+                    .offset(y: 7 + fullHeight + 3)
+                    .transition(.asymmetric(
+                        insertion: .scale(scale: 0.5, anchor: UnitPoint(x: backButtonCenter / HistoryMenu.panelWidth, y: 0))
+                            .combined(with: .opacity),
+                        removal: .scale(scale: 0.85, anchor: UnitPoint(x: backButtonCenter / HistoryMenu.panelWidth, y: 0))
+                            .combined(with: .opacity)))
+            }
+        }
     }
+
+    /// Distance from the island's leading edge to the middle of the back arrow.
+    private let backButtonCenter: CGFloat = 21
 
     private var loadingContent: some View {
         HStack(spacing: 7) {
@@ -107,9 +132,18 @@ private struct IslandBody: View {
 
     private var fullContent: some View {
         HStack(spacing: 12) {
-            Button { store.goBack() } label: { Image(systemName: "chevron.left") }
-                .disabled(page?.canGoBack != true)
-                .help("Back")
+            Button {
+                store.closeHistoryMenu()
+                store.goBack()
+            } label: {
+                // Turns to point down at the history while it is open.
+                Image(systemName: "chevron.left")
+                    .rotationEffect(.degrees(store.historyMenuShown && !store.tabBarShown ? -90 : 0))
+                    .animation(.spring(response: 0.34, dampingFraction: 0.62), value: store.historyMenuShown)
+            }
+            .disabled(page?.canGoBack != true && !store.historyMenuShown)
+            .overlay(SecondaryClickCatcher { store.toggleHistoryMenu() })
+            .help("Back · right-click for history")
             Button { store.goForward() } label: { Image(systemName: "chevron.right") }
                 .disabled(page?.canGoForward != true)
                 .help("Forward")

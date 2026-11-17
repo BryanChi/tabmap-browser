@@ -212,3 +212,122 @@ public struct HistoryTree: Codable, Equatable {
         return result
     }
 }
+
+// MARK: - Rows for the back-button menu
+
+/// One line of the history menu.
+public struct HistoryMenuRow: Identifiable, Equatable {
+    public enum Kind: Equatable {
+        /// A page.
+        case page(Int)
+        /// A side trip folded into one line: the pages reached from `start` onwards.
+        case branch(start: Int, pages: Int, expanded: Bool)
+    }
+
+    public var kind: Kind
+    /// Horizontal position of the row's dot in the graph: 0 is the main line, each
+    /// side trip opened inside another sits one lane further right.
+    public var lane: Int
+    /// The row the graph line runs down to from this one (the page it came from).
+    public var link: String?
+    /// On the way from the first page to the current one.
+    public var onCurrentPath: Bool
+    public var isCurrent: Bool
+    /// After the current page on the main line: where Forward goes.
+    public var isAhead: Bool
+    /// Inside a side trip (its own pages, not the folded line).
+    public var inBranch: Bool
+
+    public var id: String {
+        switch kind {
+        case .page(let n): return "p\(n)"
+        case .branch(let start, _, _): return "b\(start)"
+        }
+    }
+
+    public var node: Int {
+        switch kind {
+        case .page(let n): return n
+        case .branch(let start, _, _): return start
+        }
+    }
+}
+
+extension HistoryTree {
+    /// How many pages hang from `id`, itself included.
+    public func subtreeSize(_ id: Int) -> Int {
+        var count = 0
+        var stack = [id]
+        while let n = stack.popLast(), count <= nodes.count {
+            guard let node = nodes[n] else { continue }
+            count += 1
+            stack.append(contentsOf: node.children)
+        }
+        return count
+    }
+
+    /// The menu, top to bottom, newest first like a browser's back list.
+    ///
+    /// The main line is one straight run: where Forward leads at the top, then the current page,
+    /// then every page that led to it. Branches are never mixed into it. Each side trip is folded
+    /// into a single row sitting just above the page it left from; expanding it (its start id in
+    /// `expanded`) shows its pages in their own lane above that row, built the same way, so a
+    /// side trip inside a side trip folds again.
+    public func menuRows(expanded: Set<Int> = []) -> [HistoryMenuRow] {
+        guard let rootID, nodes[rootID] != nil else { return [] }
+        let path = Set(pathToCurrent)
+        var bottomUp: [HistoryMenuRow] = []
+        var stack: Set<Int> = []
+        appendLine(from: rootID, lane: 0, firstLink: nil, inBranch: false,
+                   path: path, expanded: expanded, into: &bottomUp, visiting: &stack)
+        return bottomUp.reversed()
+    }
+
+    /// A line: `start`, then on through the child on the way to the current page, or failing that
+    /// the child Forward would take.
+    private func line(from start: Int, path: Set<Int>) -> [Int] {
+        var result = [start]
+        var cursor = start
+        while result.count <= nodes.count, let n = nodes[cursor] {
+            guard let next = n.children.first(where: { path.contains($0) }) ?? preferredChild(of: cursor) else { break }
+            result.append(next)
+            cursor = next
+        }
+        return result
+    }
+
+    private func appendLine(from start: Int, lane: Int, firstLink: String?, inBranch: Bool,
+                            path: Set<Int>, expanded: Set<Int>,
+                            into rows: inout [HistoryMenuRow], visiting: inout Set<Int>) {
+        guard !visiting.contains(start) else { return }
+        visiting.insert(start)
+        let nodesInLine = line(from: start, path: path)
+        var aheadOfCurrent = false
+        var previousPage = firstLink
+        for (i, id) in nodesInLine.enumerated() {
+            guard let node = nodes[id] else { continue }
+            let pageRow = HistoryMenuRow(kind: .page(id), lane: lane, link: previousPage,
+                                         onCurrentPath: path.contains(id), isCurrent: id == currentID,
+                                         isAhead: aheadOfCurrent && !inBranch, inBranch: inBranch)
+            rows.append(pageRow)
+            if id == currentID { aheadOfCurrent = true }
+            previousPage = pageRow.id
+
+            let next = i + 1 < nodesInLine.count ? nodesInLine[i + 1] : nil
+            let detours = node.children.filter { $0 != next && nodes[$0] != nil }
+                .sorted { (nodes[$0]!.visitedAt, $0) < (nodes[$1]!.visitedAt, $1) }
+            // Oldest first going up, so the most recent side trip sits nearest the main line's next page.
+            for d in detours {
+                let open = expanded.contains(d)
+                let fold = HistoryMenuRow(kind: .branch(start: d, pages: subtreeSize(d), expanded: open),
+                                          lane: lane + 1, link: pageRow.id,
+                                          onCurrentPath: false, isCurrent: false, isAhead: false, inBranch: true)
+                rows.append(fold)
+                if open {
+                    appendLine(from: d, lane: lane + 1, firstLink: fold.id, inBranch: true,
+                               path: path, expanded: expanded, into: &rows, visiting: &visiting)
+                }
+            }
+        }
+    }
+}

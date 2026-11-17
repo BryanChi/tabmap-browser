@@ -27,6 +27,8 @@ final class BrowserStore: ObservableObject {
         didSet {
             UserDefaults.standard.set(tabBarShown, forKey: "tabBarShown")
             if tabBarShown { chromeHover = false }
+            // The dropdown hangs from whichever back button is showing; switching bars shuts it.
+            if historyMenuShown { historyMenuShown = false }
             updateWindowButtons()
         }
     }
@@ -44,6 +46,9 @@ final class BrowserStore: ObservableObject {
             if chromeHover { watchPointer() }
         }
     }
+    /// The branching history is dropping down from the back button. Keeps the island open
+    /// (unless the tab bar is on, when it drops from the bar's back button instead).
+    @Published var historyMenuShown = false { didSet { updateWindowButtons() } }
     /// The address field is being edited.
     @Published var addressEditing = false {
         didSet {
@@ -136,7 +141,7 @@ final class BrowserStore: ObservableObject {
 
     /// The island shows in full: the pointer is at the top, the address is being edited, or there is no page.
     var chromeExpanded: Bool {
-        if chromeHover || addressEditing { return true }
+        if chromeHover || addressEditing || (historyMenuShown && !tabBarShown) { return true }
         // A dock app in front always has a page, whatever the map's own tab is.
         if AppDock.shared.isFront { return false }
         return map.activeTab == nil || map.activeTab?.isBlank == true

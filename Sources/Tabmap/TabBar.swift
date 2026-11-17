@@ -104,6 +104,14 @@ struct TabBar: View {
         .frame(height: TabBarStyle.height)
         .background(.bar)
         .overlay(alignment: .bottom) { Divider() }
+        // While the history dropdown is open, a click anywhere on the bar closes it, like a menu.
+        .overlay {
+            if store.historyMenuShown {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { store.closeHistoryMenu() }
+            }
+        }
         .onAppear { chrome.barShown(true, sidebarPinned: store.sidebarShown) }
         .onDisappear { chrome.barShown(false, sidebarPinned: store.sidebarShown) }
         .onChange(of: store.sidebarShown) { pinned in chrome.barShown(true, sidebarPinned: pinned) }
@@ -135,9 +143,56 @@ private struct NavButtons: View {
 
     static func row(store: BrowserStore, back: Bool, forward: Bool) -> some View {
         HStack(spacing: 2) {
-            BarButton(symbol: "chevron.left", help: "Back (⌘[)", enabled: back) { store.goBack() }
+            // Right-click (or control-click) drops the branching history down from here; the arrow
+            // turns to point down at it while it is open, as on the island.
+            BarButton(symbol: "chevron.left", help: "Back (⌘[) · right-click for history",
+                      enabled: back || store.historyMenuShown,
+                      rotation: store.historyMenuShown ? -90 : 0) {
+                store.closeHistoryMenu()
+                store.goBack()
+            }
+            .overlay(SecondaryClickCatcher { store.toggleHistoryMenu() })
+            .background(GeometryReader { geometry in
+                Color.clear.preference(key: TabBarBackButtonX.self,
+                                       value: geometry.frame(in: .named(TabBarBackButtonX.space)).midX)
+            })
             BarButton(symbol: "chevron.right", help: "Forward (⌘])", enabled: forward) { store.goForward() }
         }
+    }
+}
+
+/// Where the tab bar's back arrow sits, measured across the page column, so the history
+/// dropdown can hang its caret under it.
+struct TabBarBackButtonX: PreferenceKey {
+    static let space = "tabBarColumn"
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        let next = nextValue()
+        if next > 0 { value = next }
+    }
+}
+
+/// The branching history dropping down from the tab bar's back button. Sits in the page area just
+/// under the bar, so it draws over the page.
+struct TabBarHistoryDrop: View {
+    @EnvironmentObject private var store: BrowserStore
+    /// The back arrow's centre, from the page column's leading edge.
+    let backX: CGFloat
+
+    var body: some View {
+        let leading = max(backX - 24, 6)
+        let caretX = backX - leading
+        let anchor = UnitPoint(x: caretX / HistoryMenu.panelWidth, y: 0)
+        ZStack(alignment: .topLeading) {
+            if store.historyMenuShown && store.tabBarShown && !store.overviewShown && backX > 0 {
+                HistoryMenu(caretX: caretX)
+                    .offset(x: leading, y: 2)
+                    .transition(.asymmetric(
+                        insertion: .scale(scale: 0.5, anchor: anchor).combined(with: .opacity),
+                        removal: .scale(scale: 0.85, anchor: anchor).combined(with: .opacity)))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -377,6 +432,7 @@ private struct BarButton: View {
     let symbol: String
     let help: String
     let enabled: Bool
+    var rotation: Double = 0
     let action: () -> Void
     @State private var hovering = false
 
@@ -384,6 +440,8 @@ private struct BarButton: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 13, weight: .medium))
+                .rotationEffect(.degrees(rotation))
+                .animation(.spring(response: 0.34, dampingFraction: 0.62), value: rotation)
                 .frame(width: 28, height: 26)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(hovering && enabled ? 0.08 : 0)))
         }
