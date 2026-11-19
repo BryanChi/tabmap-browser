@@ -40,6 +40,7 @@ final class WebTab: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelega
         EdgeProbe.shared.install(in: config)
         ContentBlocker.shared.install(in: config)
         PasswordAutofill.shared.install(in: config)
+        SearchSwitchComposer.install(in: config)
         return config
     }
 

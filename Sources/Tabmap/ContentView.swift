@@ -25,7 +25,10 @@ struct ContentView: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
                 ZStack(alignment: .top) {
-                    PageStage()
+                    VStack(spacing: 0) {
+                        SearchSwitchBar()
+                        PageStage()
+                    }
                     AppLayer()
                     Island()
                     TabBarHistoryDrop(backX: tabBarBackX)
