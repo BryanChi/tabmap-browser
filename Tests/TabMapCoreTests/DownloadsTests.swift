@@ -189,4 +189,55 @@ final class DownloadsTests: XCTestCase {
         let data = try JSONEncoder().encode(ledger)
         XCTAssertEqual(try JSONDecoder().decode(DownloadLedger.self, from: data), ledger)
     }
+
+    func testRowCountGathersEveryTabInTheRow() {
+        var map = TabMap()
+        let a = map.openRoot(url: u("alpha"), title: "Alpha", now: t0)
+        let a2 = map.openChild(of: a, url: u("alpha2"), title: "Alpha two", now: at(1), activate: false)!
+        let a3 = map.openChild(of: a, url: u("alpha3"), title: "Alpha three", now: at(2), activate: false)!
+        let b = map.openRoot(url: u("beta"), title: "Beta", now: at(3))
+        let rowA = map.trails[map.locate(a)!.trail].id
+        let rowB = map.trails[map.locate(b)!.trail].id
+
+        var ledger = DownloadLedger()
+        add(&ledger, "one.pdf", tab: a, trail: rowA, at: 10)
+        add(&ledger, "two.pdf", tab: a2, trail: rowA, at: 20)
+        add(&ledger, "three.pdf", tab: a2, trail: rowA, at: 30)
+        let failed = add(&ledger, "bad.zip", tab: a3, trail: rowA, at: 35, finish: false)
+        ledger.fail(failed, cancelled: false, now: at(36))
+        add(&ledger, "other.pdf", tab: b, trail: rowB, at: 40)
+
+        XCTAssertEqual(ledger.count(forTrail: rowA, in: map), 3, "failed downloads don't count")
+        XCTAssertEqual(ledger.tabCount(forTrail: rowA, in: map), 2)
+        XCTAssertEqual(ledger.count(forTrail: rowB, in: map), 1)
+        XCTAssertEqual(ledger.records(forTrail: rowA, in: map).map(\.filename),
+                       ["bad.zip", "three.pdf", "two.pdf", "one.pdf"])
+        XCTAssertFalse(ledger.isDownloading(trail: rowA, in: map))
+
+        // A closed tab still counts for its row; a forgotten one too, while the row is there.
+        map.close(a2, now: at(50))
+        XCTAssertEqual(ledger.count(forTrail: rowA, in: map), 3)
+        map.remove(a2)
+        XCTAssertEqual(ledger.count(forTrail: rowA, in: map), 3)
+
+        // Still downloading lights the row up.
+        add(&ledger, "big.iso", tab: a, trail: rowA, at: 60, finish: false)
+        XCTAssertTrue(ledger.isDownloading(trail: rowA, in: map))
+        XCTAssertEqual(ledger.count(forTrail: rowA, in: map), 4)
+
+        // The panel narrowed to a row lists just that row.
+        let only = ledger.groups(in: map, onlyTrail: rowB)
+        XCTAssertEqual(only.map(\.trailID), [rowB])
+        XCTAssertEqual(only.first?.records.map(\.filename), ["other.pdf"])
+    }
+
+    func testGroupTitleUsesTheRowsName() {
+        var map = TabMap()
+        let a = map.openRoot(url: u("alpha"), title: "Alpha", now: t0)
+        let loc = map.locate(a)!
+        map.trails[loc.trail].name = "Trip planning"
+        var ledger = DownloadLedger()
+        add(&ledger, "one.pdf", tab: a, trail: map.trails[loc.trail].id)
+        XCTAssertEqual(ledger.groups(in: map).first?.title, "Trip planning")
+    }
 }

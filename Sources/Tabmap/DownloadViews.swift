@@ -74,6 +74,60 @@ struct DownloadMenuItems: View {
     }
 }
 
+/// Sits on a row's name line and gathers the downloads from every tab in the row: how many files, and
+/// orange while one is still coming down. Draws nothing for a row with no downloads.
+/// Click it to list just that row's files.
+struct RowDownloadBadge: View {
+    @ObservedObject private var downloads = DownloadStore.shared
+    @ObservedObject private var store = BrowserStore.shared
+    let trailID: TrailID
+    let style: MapStyle
+
+    /// Whether a row has anything to show, so an unnamed row can still get a name line for its badge.
+    @MainActor static func shows(_ trailID: TrailID) -> Bool {
+        DownloadStore.shared.count(forTrail: trailID) > 0
+    }
+
+    var body: some View {
+        let ledger = downloads.ledger
+        let count = ledger.count(forTrail: trailID, in: store.map)
+        if count > 0 {
+            let busy = ledger.isDownloading(trail: trailID, in: store.map)
+            Button { downloads.showPanel(forTrail: trailID) } label: {
+                HStack(spacing: 2) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: style == .cards ? 11 : 10, weight: .semibold))
+                    Text("\(count)")
+                        .font(.system(size: style == .cards ? 11 : 10, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                }
+                .foregroundColor(busy ? .orange : .secondary)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(Capsule().fill((busy ? Color.orange : Color.primary).opacity(0.1)))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+            .help(tooltip(count: count, busy: busy))
+        }
+    }
+
+    private func tooltip(count: Int, busy: Bool) -> String {
+        let ledger = downloads.ledger
+        let tabs = ledger.tabCount(forTrail: trailID, in: store.map)
+        var first = count == 1 ? "1 file downloaded in this row" : "\(count) files downloaded in this row"
+        if tabs > 1 { first += " from \(tabs) tabs" }
+        if busy { first += " (still downloading)" }
+        let names = ledger.records(forTrail: trailID, in: store.map).filter(\.countsTowardTab).map(\.filename)
+        var lines = [first]
+        lines.append(contentsOf: names.prefix(8))
+        if names.count > 8 { lines.append("and \(names.count - 8) more") }
+        lines.append("Click to list them")
+        return lines.joined(separator: "\n")
+    }
+}
+
 // MARK: The layer over the window
 
 /// Everything downloads put on screen: a small pill at the top right while something is downloading
@@ -177,14 +231,15 @@ struct DownloadsPanel: View {
     @ObservedObject private var store = BrowserStore.shared
 
     var body: some View {
-        let groups = downloads.ledger.groups(in: store.map, onlyTab: downloads.panelTab)
+        let groups = downloads.ledger.groups(in: store.map, onlyTab: downloads.panelTab,
+                                             onlyTrail: downloads.panelTrail)
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
             if groups.isEmpty {
-                Text(downloads.panelTab == nil
-                     ? "Nothing downloaded yet.\nFiles you download are listed here under the row of the map they came from."
-                     : "Nothing has been downloaded from this tab.")
+                Text(downloads.panelTab != nil ? "Nothing has been downloaded from this tab."
+                     : downloads.panelTrail != nil ? "Nothing has been downloaded from this row."
+                     : "Nothing downloaded yet.\nFiles you download are listed here under the row of the map they came from.")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -226,10 +281,10 @@ struct DownloadsPanel: View {
         HStack(spacing: 8) {
             Text("Downloads")
                 .font(.system(size: 13, weight: .semibold))
-            if let tab = downloads.panelTab {
-                Button { downloads.panelTab = nil } label: {
+            if downloads.panelTab != nil || downloads.panelTrail != nil {
+                Button { downloads.panelTab = nil; downloads.panelTrail = nil } label: {
                     HStack(spacing: 4) {
-                        Text(store.map.tab(tab)?.displayTitle ?? "One tab")
+                        Text(filterTitle)
                             .lineLimit(1)
                             .truncationMode(.tail)
                         Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
@@ -242,7 +297,8 @@ struct DownloadsPanel: View {
                     .background(Capsule().fill(Color.primary.opacity(0.1)))
                 }
                 .buttonStyle(.plain)
-                .help("Showing files from one tab. Click to show all downloads.")
+                .help(downloads.panelTab != nil ? "Showing files from one tab. Click to show all downloads."
+                                                : "Showing files from one row. Click to show all downloads.")
             }
             Spacer(minLength: 0)
             Button("Clear") { downloads.clearInactive() }
@@ -256,6 +312,14 @@ struct DownloadsPanel: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+    }
+
+    private var filterTitle: String {
+        if let tab = downloads.panelTab { return store.map.tab(tab)?.displayTitle ?? "One tab" }
+        if let id = downloads.panelTrail, let trail = store.map.trails.first(where: { $0.id == id }) {
+            return RowControls.name(of: trail)
+        }
+        return "One row"
     }
 }
 
@@ -284,6 +348,7 @@ struct DownloadRow: View {
             }
             Spacer(minLength: 4)
             if hovering { buttons(usable: usable) }
+            if canGoToSource { DownloadSourceButton(record: record) }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -376,10 +441,6 @@ struct DownloadRow: View {
                 Button { downloads.retry(record) } label: { Image(systemName: "arrow.clockwise") }
                     .help("Download again")
             }
-            if canGoToSource {
-                Button { downloads.goToSource(record) } label: { Image(systemName: "arrow.uturn.backward.circle") }
-                    .help(sourceIsInMap ? "Go to the tab this came from" : "Open the page this came from again")
-            }
             if usable {
                 Button { downloads.revealInFinder(record) } label: { Image(systemName: "magnifyingglass.circle") }
                     .help("Show in Finder")
@@ -413,5 +474,112 @@ struct DownloadRow: View {
             if record.state != .finished { Button("Download Again") { downloads.retry(record) } }
             Button("Remove from List") { downloads.remove(record) }
         }
+    }
+}
+
+/// The website a file came from, as its icon at the end of the row. Hovering shows the page's
+/// title and a picture of it; clicking goes back to the tab, or opens the page again.
+struct DownloadSourceButton: View {
+    @ObservedObject private var store = BrowserStore.shared
+    let record: DownloadRecord
+    @State private var preview = false
+    @State private var hoverTask: Task<Void, Never>?
+
+    var body: some View {
+        Button {
+            hoverTask?.cancel()
+            preview = false
+            DownloadStore.shared.goToSource(record)
+        } label: {
+            FaviconView(url: record.pageURL ?? record.sourceURL, size: 15)
+                .frame(width: 24, height: 24)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(preview ? 0.14 : 0.06)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { inside in
+            hoverTask?.cancel()
+            if inside {
+                hoverTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    if !Task.isCancelled { preview = true }
+                }
+            } else {
+                preview = false
+            }
+        }
+        .onDisappear { hoverTask?.cancel() }
+        .popover(isPresented: $preview, arrowEdge: .leading) {
+            DownloadSourcePreview(record: record)
+                .environmentObject(store.favicons)
+        }
+    }
+}
+
+struct DownloadSourcePreview: View {
+    @ObservedObject private var downloads = DownloadStore.shared
+    @ObservedObject private var store = BrowserStore.shared
+    let record: DownloadRecord
+
+    var body: some View {
+        let _ = downloads.pictureVersions[record.id]
+        VStack(alignment: .leading, spacing: 8) {
+            if let image = picture {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 300, height: 188, alignment: .top)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
+            } else {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(0.06))
+                    .frame(width: 300, height: 110)
+                    .overlay(FaviconView(url: pageURL, size: 36))
+            }
+            HStack(alignment: .top, spacing: 7) {
+                FaviconView(url: pageURL, size: 14)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(2)
+                    if let address = pageURL?.absoluteString {
+                        Text(address)
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+            }
+            Text(hint)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+        }
+        .padding(10)
+        .frame(width: 320, alignment: .leading)
+    }
+
+    private var pageURL: URL? { record.pageURL ?? record.sourceURL }
+
+    private var liveTab: MapTab? { record.tabID.flatMap { store.map.tab($0) } }
+
+    /// The picture taken when the download started, or else the tab's latest one.
+    private var picture: NSImage? {
+        downloads.pagePicture(record.id) ?? (liveTab != nil ? record.tabID.flatMap { store.snapshot(for: $0) } : nil)
+    }
+
+    private var title: String {
+        let saved = record.pageTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !saved.isEmpty { return saved }
+        if let tab = liveTab, !tab.displayTitle.isEmpty { return tab.displayTitle }
+        return pageURL?.host ?? "Unknown page"
+    }
+
+    private var hint: String {
+        liveTab != nil ? "Click to go to this tab" : "Click to open this page again"
     }
 }

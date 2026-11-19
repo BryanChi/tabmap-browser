@@ -194,8 +194,9 @@ public struct DownloadLedger: Codable, Equatable {
     // MARK: Grouping
 
     /// The list, grouped by the row of the map each file came from. A file follows its tab if the tab
-    /// has moved to another row. Groups are ordered by their newest download. `onlyTab` narrows to one tab.
-    public func groups(in map: TabMap, onlyTab: TabID? = nil) -> [DownloadGroup] {
+    /// has moved to another row. Groups are ordered by their newest download. `onlyTab` narrows to one tab,
+    /// `onlyTrail` to one row.
+    public func groups(in map: TabMap, onlyTab: TabID? = nil, onlyTrail: TrailID? = nil) -> [DownloadGroup] {
         var order: [String] = []
         var byKey: [String: DownloadGroup] = [:]
         let lost = "lost"
@@ -208,17 +209,45 @@ public struct DownloadLedger: Codable, Equatable {
             } else if let id = record.trailID {
                 trail = map.trails.first { $0.id == id }
             }
+            if let onlyTrail, trail?.id != onlyTrail { continue }
             let key = trail?.id.uuidString ?? lost
             if byKey[key] == nil {
                 order.append(key)
                 byKey[key] = DownloadGroup(id: key,
                                            trailID: trail?.id,
-                                           title: trail?.tabs.first?.displayTitle ?? "Pages no longer in the map",
+                                           title: trail.map(Self.title(of:)) ?? "Pages no longer in the map",
                                            records: [])
             }
             byKey[key]?.records.append(record)
         }
         return order.compactMap { byKey[$0] }
+    }
+
+    private static func title(of trail: Trail) -> String {
+        if let name = trail.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty { return name }
+        return trail.openTabs.first?.displayTitle ?? trail.tabs.first?.displayTitle ?? "Row"
+    }
+
+    // MARK: Per row
+
+    /// Every file downloaded from a row: from any of its tabs, open or closed, and from tabs that have since
+    /// been forgotten while the row stayed. A file follows its tab when the tab moves to another row. Newest first.
+    public func records(forTrail id: TrailID, in map: TabMap) -> [DownloadRecord] {
+        groups(in: map, onlyTrail: id).first?.records ?? []
+    }
+
+    /// How many files were downloaded from a row. This is the number on the row's badge.
+    public func count(forTrail id: TrailID, in map: TabMap) -> Int {
+        records(forTrail: id, in: map).filter(\.countsTowardTab).count
+    }
+
+    /// How many of a row's tabs have files downloaded from them.
+    public func tabCount(forTrail id: TrailID, in map: TabMap) -> Int {
+        Set(records(forTrail: id, in: map).filter(\.countsTowardTab).compactMap(\.tabID)).count
+    }
+
+    public func isDownloading(trail id: TrailID, in map: TabMap) -> Bool {
+        records(forTrail: id, in: map).contains { $0.state == .inProgress }
     }
 }
 

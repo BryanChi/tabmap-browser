@@ -234,7 +234,7 @@ struct RowFrame<Row: View>: View {
     /// A marked row always gets a name line, so its mark shows; an unnamed one uses its first tab's title.
     private var nameLine: AnyView? {
         if let label { return label }
-        guard trail.mark != nil else { return nil }
+        guard trail.mark != nil || RowDownloadBadge.shows(trail.id) else { return nil }
         return AnyView(
             Text(RowControls.name(of: trail))
                 .font(.system(size: 11, weight: .semibold))
@@ -256,6 +256,8 @@ struct RowFrame<Row: View>: View {
                         RowMarkBadge(trail: trail, mark: mark, style: style)
                     }
                     line
+                    RowDownloadBadge(trailID: trail.id, style: style)
+                        .padding(.leading, 4)
                     Spacer(minLength: 0)
                     RowButtons(trail: trail, style: style, archived: archived, hovering: hovering)
                         .opacity(hovering ? 1 : 0)

@@ -19,6 +19,8 @@ final class DownloadStore: NSObject, ObservableObject, WKDownloadDelegate {
     @Published var panelShown = false
     /// When set, the panel lists only the files from this tab.
     @Published var panelTab: TabID?
+    /// When set, the panel lists only the files from this row.
+    @Published var panelTrail: TrailID?
 
     private struct Live {
         let download: WKDownload
@@ -31,6 +33,11 @@ final class DownloadStore: NSObject, ObservableObject, WKDownloadDelegate {
     private var saveTask: Task<Void, Never>?
     private var keyMonitor: Any?
     private let fileURL: URL
+    /// A picture of the page each file came from, taken when the download started.
+    private let picturesDir: URL
+    private let pictureCache = NSCache<NSString, NSImage>()
+    /// Bumped when a page picture is saved, so open previews redraw.
+    @Published private(set) var pictureVersions: [DownloadID: Int] = [:]
 
     private override init() {
         let fm = FileManager.default
@@ -38,6 +45,8 @@ final class DownloadStore: NSObject, ObservableObject, WKDownloadDelegate {
         let root = base.appendingPathComponent("Tabmap", isDirectory: true)
         try? fm.createDirectory(at: root, withIntermediateDirectories: true)
         fileURL = root.appendingPathComponent("downloads.json")
+        picturesDir = root.appendingPathComponent("download-pages", isDirectory: true)
+        try? fm.createDirectory(at: picturesDir, withIntermediateDirectories: true)
         super.init()
         if let data = try? Data(contentsOf: fileURL),
            let saved = try? JSONDecoder().decode(DownloadLedger.self, from: data) {
@@ -89,6 +98,7 @@ final class DownloadStore: NSObject, ObservableObject, WKDownloadDelegate {
                               tabID: mapTab == nil ? nil : tab,
                               trailID: trail,
                               now: Date())
+        capturePage(for: id, tab: mapTab == nil ? nil : tab)
         download.delegate = self
         live[ObjectIdentifier(download)] = Live(download: download, id: id)
         progress[id] = -1
@@ -178,6 +188,8 @@ final class DownloadStore: NSObject, ObservableObject, WKDownloadDelegate {
 
     func count(forTab tab: TabID) -> Int { ledger.count(forTab: tab) }
 
+    func count(forTrail trail: TrailID) -> Int { ledger.count(forTrail: trail, in: BrowserStore.shared.map) }
+
     /// Tabs to keep in a map search because a file with a matching name came from them.
     func tabs(matching query: String) -> Set<TabID> { ledger.tabIDs(matching: query) }
 
@@ -197,8 +209,9 @@ final class DownloadStore: NSObject, ObservableObject, WKDownloadDelegate {
 
     // MARK: Panel
 
-    func showPanel(forTab tab: TabID? = nil) {
+    func showPanel(forTab tab: TabID? = nil, forTrail trail: TrailID? = nil) {
         panelTab = tab
+        panelTrail = tab == nil ? trail : nil
         panelShown = true
         if keyMonitor == nil {
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -288,12 +301,68 @@ final class DownloadStore: NSObject, ObservableObject, WKDownloadDelegate {
     func remove(_ record: DownloadRecord) {
         if record.state == .inProgress { cancel(record) }
         ledger.remove(record.id)
+        forgetPicture(record.id)
         saveSoon()
     }
 
     func clearInactive() {
+        for record in ledger.records where record.state != .inProgress { forgetPicture(record.id) }
         ledger.clearInactive()
         saveSoon()
+    }
+
+    // MARK: Page pictures
+
+    /// The picture of the page a file came from, taken when it started downloading.
+    func pagePicture(_ id: DownloadID) -> NSImage? {
+        let key = id.uuidString as NSString
+        if let cached = pictureCache.object(forKey: key) { return cached }
+        guard let image = NSImage(contentsOf: pictureURL(id)) else { return nil }
+        pictureCache.setObject(image, forKey: key)
+        return image
+    }
+
+    private func pictureURL(_ id: DownloadID) -> URL {
+        picturesDir.appendingPathComponent(id.uuidString + ".jpg")
+    }
+
+    /// Keeps a picture of the page, so the list can show it even after the tab is gone.
+    /// Uses the live page when it is on screen, otherwise the tab's last snapshot.
+    private func capturePage(for id: DownloadID, tab: TabID?) {
+        guard let tab else { return }
+        let browser = BrowserStore.shared
+        if let page = browser.page(for: tab), page.webView.window != nil, page.webView.bounds.width > 10 {
+            let config = WKSnapshotConfiguration()
+            config.snapshotWidth = NSNumber(value: 640)
+            page.webView.takeSnapshot(with: config) { image, _ in
+                Task { @MainActor in
+                    let store = DownloadStore.shared
+                    if let image = image ?? browser.snapshot(for: tab) { store.savePicture(image, for: id) }
+                }
+            }
+        } else if let image = browser.snapshot(for: tab) {
+            savePicture(image, for: id)
+        }
+    }
+
+    private func savePicture(_ image: NSImage, for id: DownloadID) {
+        guard ledger.record(id) != nil else { return }
+        pictureCache.setObject(image, forKey: id.uuidString as NSString)
+        pictureVersions[id, default: 0] += 1
+        let url = pictureURL(id)
+        Task.detached(priority: .utility) {
+            guard let tiff = image.tiffRepresentation,
+                  let rep = NSBitmapImageRep(data: tiff),
+                  let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.6])
+            else { return }
+            try? jpeg.write(to: url, options: .atomic)
+        }
+    }
+
+    private func forgetPicture(_ id: DownloadID) {
+        pictureCache.removeObject(forKey: id.uuidString as NSString)
+        pictureVersions[id] = nil
+        try? FileManager.default.removeItem(at: pictureURL(id))
     }
 
     // MARK: From a file back to its page
