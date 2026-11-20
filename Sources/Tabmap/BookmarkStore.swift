@@ -331,6 +331,36 @@ final class BookmarkStore: ObservableObject {
         try? Data(contentsOf: copyURL(id))
     }
 
+    // MARK: iCloud sync (CloudSync.swift)
+
+    func pictureFile(_ id: BookmarkID) -> URL { snapshotURL(id) }
+    func textFile(_ id: BookmarkID) -> URL { textURL(id) }
+
+    /// The library after merging what other Macs changed. Bookmarks that went away lose their files here.
+    func replaceFromSync(_ merged: BookmarkLibrary, arrived: Set<BookmarkID>) {
+        let kept = Set(merged.bookmarks.map(\.id))
+        for old in library.bookmarks where !kept.contains(old.id) {
+            texts[old.id] = nil
+            images.removeObject(forKey: old.id.uuidString as NSString)
+            snapshotVersions[old.id] = nil
+            for url in [snapshotURL(old.id), textURL(old.id), copyURL(old.id)] { try? FileManager.default.removeItem(at: url) }
+            if editing == old.id { editing = nil }
+            if viewingCopy == old.id { viewingCopy = nil }
+        }
+        library = merged
+        for id in arrived { snapshotVersions[id, default: 0] += 1 }
+        scheduleSave()
+    }
+
+    /// Pictures and saved text that came down from iCloud Drive.
+    func filesArrived(_ ids: Set<BookmarkID>) {
+        for id in ids {
+            images.removeObject(forKey: id.uuidString as NSString)
+            if let text = try? String(contentsOf: textURL(id), encoding: .utf8) { texts[id] = text }
+            snapshotVersions[id, default: 0] += 1
+        }
+    }
+
     private func snapshotURL(_ id: BookmarkID) -> URL { snapshotsDir.appendingPathComponent(id.uuidString + ".jpg") }
     private func textURL(_ id: BookmarkID) -> URL { textDir.appendingPathComponent(id.uuidString + ".txt") }
     private func copyURL(_ id: BookmarkID) -> URL { copiesDir.appendingPathComponent(id.uuidString + ".webarchive") }

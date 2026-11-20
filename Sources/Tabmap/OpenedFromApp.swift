@@ -210,6 +210,16 @@ struct DefaultBrowserSection: View {
     }
 }
 
+/// "Make Tabmap Your Default Browser…" in the Tabmap menu. macOS asks before it changes anything.
+struct MakeDefaultBrowserMenuItem: View {
+    var body: some View {
+        Button("Make Tabmap Your Default Browser…") {
+            DefaultBrowser.makeDefault { _ in }
+        }
+        .disabled(Bundle.main.bundleURL.pathExtension != "app" || DefaultBrowser.isDefault)
+    }
+}
+
 // MARK: Icons
 
 /// Looks up app icons by bundle id and keeps them.
@@ -239,7 +249,12 @@ struct SourceAppIcon: View {
 
     var body: some View {
         Group {
-            if let icon = AppIconStore.shared.icon(for: app.bundleID) {
+            if let symbol = Self.symbols[app.bundleID] {
+                Image(systemName: symbol)
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundColor(.secondary)
+            } else if let icon = AppIconStore.shared.icon(for: app.bundleID) {
                 Image(nsImage: icon)
                     .resizable()
                     .interpolation(.high)
@@ -253,6 +268,12 @@ struct SourceAppIcon: View {
         .frame(width: size, height: size)
         .accessibilityLabel("Opened from \(app.name)")
     }
+
+    /// Tabs that came from another device rather than an app.
+    private static let symbols: [String: String] = [
+        Handoff.sourceApp.bundleID: "laptopcomputer.and.iphone",
+        CloudSync.otherMacBundleID: "laptopcomputer",
+    ]
 }
 
 /// The app icon in the top-left corner of a thumbnail card.

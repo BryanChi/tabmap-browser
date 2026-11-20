@@ -38,6 +38,15 @@
             </array>
         </dict>
     </array>
+    <key>NSUserActivityTypes</key>
+    <array>
+        <string>NSUserActivityTypeBrowsingWeb</string>
+    </array>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoadsInWebContent</key>
+        <true/>
+    </dict>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
@@ -53,14 +62,6 @@
                 <string>public.xhtml</string>
             </array>
         </dict>
-    </array>
-    <key>NSAppTransportSecurity</key>
-    <dict>
-        <key>NSAllowsArbitraryLoadsInWebContent</key>
-        <true/>
-    </dict>
-    <key>CFBundleDocumentTypes</key>
-    <array>
         <dict>
             <key>CFBundleTypeName</key>
             <string>Downloaded file</string>

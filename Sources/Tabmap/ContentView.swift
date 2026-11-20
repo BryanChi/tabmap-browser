@@ -45,6 +45,8 @@ struct ContentView: View {
                 .zIndex(2)
             BookmarksLayer()
                 .zIndex(5)
+            OtherMacsLayer()
+                .zIndex(6)
         }
         .overlay(alignment: .leading) {
             ZStack(alignment: .leading) {

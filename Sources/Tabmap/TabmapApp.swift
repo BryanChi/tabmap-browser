@@ -13,6 +13,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Needed when launched with `swift run`, where there is no app bundle to say this is a regular app.
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        Handoff.shared.start()
+        CloudSync.shared.start()
+    }
+
+    /// Handoff from another device: a page from Safari on your iPhone or another Mac.
+    func application(_ application: NSApplication, willContinueUserActivityWithType userActivityType: String) -> Bool {
+        userActivityType == NSUserActivityTypeBrowsingWeb
+    }
+
+    func application(_ application: NSApplication, continue userActivity: NSUserActivity,
+                     restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void) -> Bool {
+        Handoff.shared.receive(userActivity)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -70,9 +82,14 @@ struct TabmapApp: App {
                 Button("Reopen Closed Tab") { store.reopenLastClosed() }
                     .keyboardShortcut("t", modifiers: [.command, .shift])
             }
+            CommandGroup(after: .appInfo) {
+                MakeDefaultBrowserMenuItem()
+            }
             CommandGroup(after: .sidebar) {
                 Button("Show Tab Map") { store.toggleOverview() }
                     .keyboardShortcut("e", modifiers: [.command])
+                Button("Rows on Your Other Macs") { CloudSync.shared.togglePanel() }
+                    .keyboardShortcut("o", modifiers: [.command, .shift])
                 Button("Downloads") { DownloadStore.shared.togglePanel() }
                     .keyboardShortcut("l", modifiers: [.command, .option])
                 Button(store.sidebarShown ? "Unpin Map Sidebar" : "Pin Map Sidebar Open") {
