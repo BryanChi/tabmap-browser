@@ -33,6 +33,7 @@ struct ContentView: View {
                     AppDockPill()
                     FindIsland()
                     PasswordIsland()
+                    AutofillIsland()
                 }
                 } // page column with tab bar
                 .coordinateSpace(name: TabBarBackButtonX.space)

@@ -109,6 +109,7 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             PasswordSettingsSection()
+            AutofillSettingsSection()
         }
         .padding(20)
         .frame(width: 460)

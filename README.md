@@ -115,6 +115,14 @@ What macOS does not allow a browser like this (as of macOS 26):
 - **Passkeys** in a WKWebView need Apple's `com.apple.developer.web-browser.public-key-credential` entitlement. The Account Holder of a paid Apple Developer account requests it on a dedicated form; Apple approves it by hand. Without it WebKit refuses every passkey request, so Tabmap tells sites there is no passkey support (most then show their password form) and, when a site asks for a passkey anyway, offers to finish that sign-in in Safari.
 - Once the entitlement is granted, build with `TABMAP_SIGN_IDENTITY="Developer ID Application: …" TABMAP_TEAM_ID=XXXXXXXXXX TABMAP_PROVISIONING_PROFILE=path/to/profile.provisionprofile scripts/make-app.sh`. The app then detects the entitlement, drops the fallback, and WebKit handles passkeys from iCloud Keychain, security keys and phones itself. The bundle ID in `scripts/Info.plist` must match the App ID the entitlement was granted for.
 
+## Addresses and cards
+
+- **Fill.** Click into an address or payment form and a pill under the island offers your addresses or cards. Choosing one fills that form in that frame only, and only over https. Fields you already typed in are left alone.
+- **Addresses** come from your own card in Contacts (Settings asks for Contacts access once) plus any you add in Settings > Addresses or save from a form. Tabmap never writes to Contacts. Saved addresses live in `~/Library/Application Support/Tabmap/addresses.json`, readable only by your Mac account.
+- **Cards** live in your login keychain (one "Tabmap Credit Card" item each). Filling asks for Touch ID or your Mac password every time. The security code is never saved or filled: the cursor lands in its field for you to type it.
+- **Save.** After you send a form with a new card or address, the pill offers to save it. Turn this off in Settings.
+- Form rules (which field is which, select matching for states, countries, months and card types) are in `TabMapCore/FormAutofill.swift` with tests.
+
 ## Keyboard
 
 | Keys | Action |
