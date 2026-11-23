@@ -66,6 +66,8 @@ struct ContentView: View {
         .overlay(alignment: .top) {
             WindowDragArea().frame(height: 6)
         }
+        // Claude's pointer, the glow around the page it works on, and its Stop pill.
+        .overlay { AgentOverlay() }
         .background(WindowAccessor { store.attach(window: $0) })
         .ignoresSafeArea()
         .navigationTitle(store.windowTitle)

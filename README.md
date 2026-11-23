@@ -115,6 +115,16 @@ What macOS does not allow a browser like this (as of macOS 26):
 - **Passkeys** in a WKWebView need Apple's `com.apple.developer.web-browser.public-key-credential` entitlement. The Account Holder of a paid Apple Developer account requests it on a dedicated form; Apple approves it by hand. Without it WebKit refuses every passkey request, so Tabmap tells sites there is no passkey support (most then show their password form) and, when a site asks for a passkey anyway, offers to finish that sign-in in Safari.
 - Once the entitlement is granted, build with `TABMAP_SIGN_IDENTITY="Developer ID Application: …" TABMAP_TEAM_ID=XXXXXXXXXX TABMAP_PROVISIONING_PROFILE=path/to/profile.provisionprofile scripts/make-app.sh`. The app then detects the entitlement, drops the fallback, and WebKit handles passkeys from iCloud Keychain, security keys and phones itself. The bundle ID in `scripts/Info.plist` must match the App ID the entitlement was granted for.
 
+## Letting Claude control Tabmap
+
+Turn on **Settings > Let Claude control Tabmap**, then run the command shown there in Terminal to add Tabmap to Claude Code as an MCP server (`claude mcp add --transport http tabmap http://127.0.0.1:47823/mcp --header "Authorization: Bearer <key>"`).
+
+- Claude gets tools to list and switch tabs, open pages, read a page (text plus numbered elements), take a screenshot, click, hover, type, press keys, scroll, pick from drop-downs and wait.
+- Clicks, typing and scrolling are real mouse, keyboard and wheel events sent to the page, in your normal signed-in session. Pages Claude opens go in its own row, marked with Claude's icon.
+- While Claude acts, the page glows, Claude's own pointer moves across it, and a pill at the bottom says what it is doing, with **Stop**. Clicking or typing in the window yourself also stops it.
+- Claude never reads or types passwords. When a site shows a human check (CAPTCHA, Cloudflare and the like), asks for a password, or puts up a dialog, Claude stops, you get a notification, and the pill shows **Done** for when you have dealt with it. Claude does not try to get past human checks.
+- The server listens on 127.0.0.1 only, refuses requests from web pages, and needs the key from Settings (**New Key** replaces it).
+
 ## Keyboard
 
 | Keys | Action |

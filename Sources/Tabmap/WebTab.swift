@@ -192,7 +192,9 @@ final class WebTab: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelega
         alert.messageText = frame.request.url?.host ?? "This page says"
         alert.informativeText = message
         alert.addButton(withTitle: "OK")
+        AgentControl.shared.pageAsks(message, tab: id, site: frame.request.url?.host)
         alert.runModal()
+        AgentControl.shared.pageAnswered()
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
@@ -202,6 +204,8 @@ final class WebTab: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelega
         alert.informativeText = message
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
+        AgentControl.shared.pageAsks(message, tab: id, site: frame.request.url?.host)
+        defer { AgentControl.shared.pageAnswered() }
         return alert.runModal() == .alertFirstButtonReturn
     }
 

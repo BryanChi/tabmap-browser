@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Needed when launched with `swift run`, where there is no app bundle to say this is a regular app.
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        // The local server Claude connects to, when "Let Claude control Tabmap" is on.
+        AgentControl.shared.startIfEnabled()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
