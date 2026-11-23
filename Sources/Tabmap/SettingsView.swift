@@ -14,6 +14,7 @@ private struct Choice<Value: Hashable>: Identifiable {
 struct SettingsView: View {
     @EnvironmentObject private var store: BrowserStore
     @AppStorage(GestureNavigator.edgeSwipeKey) private var edgeSwipe = true
+    @AppStorage(GestureNavigator.newTabHopKey) private var newTabHop = true
     @AppStorage(MergeAdvisor.enabledKey) private var mergeSuggestions = true
     @AppStorage(BrowserStore.jumpToDuplicatesKey) private var jumpToDuplicates = true
     @AppStorage(BookmarkStore.hotCornerKey) private var bookmarkCorner = BookmarkStore.HotCorner.off.rawValue
@@ -77,6 +78,12 @@ struct SettingsView: View {
             Section {
                 Toggle("Swipe past the edge of a page to move through the map", isOn: $edgeSwipe)
                 Text("With this off, hold ⌥ while swiping with two fingers to move between tabs.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+            Section {
+                Toggle("Zoom out to the map when a link opens a new tab", isOn: $newTabHop)
+                Text("The page shrinks onto its card, the new tab pops into its row, then it zooms in. Off: the new page slides in.")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }

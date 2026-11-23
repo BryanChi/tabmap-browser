@@ -215,7 +215,8 @@ final class BrowserStore: ObservableObject {
     /// A link opened from `parent` (cmd-click). Lands to the parent's right.
     /// When the page is already in the map: with `activate`, go to it instead; in the background,
     /// skip the copy only if the page is already open in this row.
-    func openChild(of parent: TabID, url: URL, activate: Bool) {
+    /// `hop`: a link clicked on the page; switching zooms out to the map and into the new card.
+    func openChild(of parent: TabID, url: URL, activate: Bool, hop: Bool = false) {
         if jumpToDuplicates {
             if activate, let existing = map.duplicate(of: url, from: parent) {
                 choose(existing)
@@ -225,7 +226,9 @@ final class BrowserStore: ObservableObject {
         }
         guard let id = map.openChild(of: parent, url: url, now: Date(), activate: false) else { return }
         ensureLoaded(id)
-        if activate { self.activate(id, commit: true) }
+        if activate, !(hop && GestureNavigator.shared.hopToNewTab(id, from: parent)) {
+            self.activate(id, commit: true)
+        }
         scheduleSave()
     }
 
@@ -236,7 +239,8 @@ final class BrowserStore: ObservableObject {
         let page = WebTab(id: id, store: self, configuration: configuration)
         webTabs[id] = page
         loadedIDs.insert(id)
-        activate(id, commit: true)
+        // From the page on stage: zoom out to the map and into the new tab (NewTabHop.swift).
+        if !GestureNavigator.shared.hopToNewTab(id, from: parent) { activate(id, commit: true) }
         return page.webView
     }
 

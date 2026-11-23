@@ -104,7 +104,7 @@ final class WebTab: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelega
         // Cmd-click: open to the right of this tab, in the background. Add Shift to switch to it.
         if navigationAction.navigationType == .linkActivated,
            navigationAction.modifierFlags.contains(.command) {
-            store?.openChild(of: id, url: url, activate: navigationAction.modifierFlags.contains(.shift))
+            store?.openChild(of: id, url: url, activate: navigationAction.modifierFlags.contains(.shift), hop: true)
             return .cancel
         }
 

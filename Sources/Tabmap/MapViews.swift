@@ -419,6 +419,8 @@ struct TabCard: View {
             .frame(width: width, alignment: .leading)
         }
         .opacity(tab.isClosed ? 0.6 : 1)
+        // A tab a link just opened pops into its row (NewTabHop.swift).
+        .modifier(NewTabPop(tabID: tab.id))
     }
 
     private var borderColor: Color {

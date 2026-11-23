@@ -723,15 +723,18 @@ final class GestureNavigator {
         settingOverviewFlag = false
     }
 
-    private func settleZoom(to target: CGFloat, velocity: CGFloat) {
+    /// `then` runs once the zoom has come to rest (and not if another zoom replaces this one).
+    private func settleZoom(to target: CGFloat, velocity: CGFloat, stiffness: CGFloat = 300,
+                            then: (() -> Void)? = nil) {
         zoomSpring = SpringValue(value: zoom.progress, velocity: velocity, target: target)
         zoomCompletion = { [weak self] in
             guard let self else { return }
             self.restZoom(overview: target >= 0.5)
+            then?()
         }
         startTicker { [weak self] dt in
             guard let self, var spring = self.zoomSpring else { return }
-            let done = spring.step(dt, stiffness: 300, restDistance: 0.003, restSpeed: 0.05)
+            let done = spring.step(dt, stiffness: stiffness, restDistance: 0.003, restSpeed: 0.05)
             self.zoomSpring = spring
             if done {
                 self.finishZoomNow()
@@ -789,7 +792,8 @@ final class GestureNavigator {
     }
 
     /// Zooms from the map into `id`'s page. The caller has already made it the current tab.
-    func closeOverview(showing id: TabID?) {
+    func closeOverview(showing id: TabID?, stiffness: CGFloat = 300, velocity: CGFloat = -2.5,
+                       then: (() -> Void)? = nil) {
         finishSwipeNow()
         finishZoomNow()
         guard pinch == nil else { return }
@@ -804,7 +808,7 @@ final class GestureNavigator {
         zoom.interactive = true
         setZoom(1)
         setOverviewFlag(false)
-        settleZoom(to: 0, velocity: -2.5)
+        settleZoom(to: 0, velocity: velocity, stiffness: stiffness, then: then)
     }
 
     /// Called by the store whenever `overviewShown` changes. When something other than this class
@@ -816,5 +820,69 @@ final class GestureNavigator {
         if settle == nil { stopTicker() }
         pinch = nil
         restZoom(overview: shown)
+    }
+
+    // MARK: New tab from a link (NewTabHop.swift)
+
+    /// A link that opens a new tab zooms out to the map, shows the new card landing in its row,
+    /// then zooms into it. Off: the new page just slides in.
+    static let newTabHopKey = "newTabHop"
+    private var newTabHopEnabled: Bool {
+        (UserDefaults.standard.object(forKey: Self.newTabHopKey) as? Bool) ?? true
+    }
+    /// Each half of the hop is snappier than a pinch settling; the whole hop is about 0.6 s.
+    private static let hopStiffness: CGFloat = 1100
+    /// How long the map stays up so the new card can be seen popping into its row.
+    private static let hopPause: TimeInterval = 0.18
+    private var hopStep: DispatchWorkItem?
+
+    /// A link on `parent`, the page on stage, opened `child` (already in the map, not yet current).
+    /// Zooms out to the map, pops the new card in, then zooms into it and makes it current.
+    /// False when the hop can't run right now; the caller then switches to the tab itself.
+    func hopToNewTab(_ child: TabID, from parent: TabID) -> Bool {
+        guard newTabHopEnabled, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              let stage, stage.window != nil, !stage.isHidden, !store.overviewShown,
+              !zoom.interactive, scrollState != .engaged, pinch == nil, settle == nil, zoomSpring == nil,
+              !AppDock.shared.isFront,
+              store.map.activeTabID == parent,
+              stage.current == PageKey(store.map.screenID(of: parent))
+        else { return false }
+        hopStep?.cancel()
+        store.prepareOverview()
+        NewTabArrival.shared.arriving = child
+        zoomTab = parent
+        stage.busy = true
+        zoom.interactive = true
+        setZoom(0)
+        settleZoom(to: 1, velocity: 7, stiffness: Self.hopStiffness) { [weak self] in
+            self?.hopShowCard(child)
+        }
+        return true
+    }
+
+    /// The map is up: bring the new card into view, let it pop in, then zoom into it.
+    private func hopShowCard(_ child: TabID) {
+        guard store.overviewShown, store.map.tab(child)?.isClosed == false else { hopEnd(); return }
+        // Selecting it outlines it and scrolls it into view if the row runs off screen.
+        store.overviewSelection = child
+        let step = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.hopStep = nil
+            // Anything the user did meanwhile (Esc, picking another card, a pinch) wins.
+            guard self.store.overviewShown, !self.zoom.interactive, self.pinch == nil,
+                  self.store.map.tab(child)?.isClosed == false else { self.hopEnd(); return }
+            self.store.activate(child, commit: true)
+            self.closeOverview(showing: child, stiffness: Self.hopStiffness, velocity: -7) { [weak self] in
+                self?.hopEnd()
+            }
+            self.store.focusPage()
+        }
+        hopStep = step
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.hopPause, execute: step)
+    }
+
+    private func hopEnd() {
+        hopStep = nil
+        NewTabArrival.shared.arriving = nil
     }
 }
