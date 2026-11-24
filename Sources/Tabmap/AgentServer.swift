@@ -188,8 +188,11 @@ enum AgentMCP {
     static let instructions = """
     You are controlling Tabmap, the user's own web browser on their Mac, in their normal signed-in session. \
     Your clicks and typing arrive as real mouse and keyboard input, and the user watches your pointer. \
-    Start with read_page (numbered elements you can click or type into) or screenshot. \
-    open_url opens pages in your own row of the tab map unless you ask for the current tab. \
+    Start with read_page (numbered elements you can click or type into); take a screenshot only when the layout matters. \
+    open_url opens pages in your own row of the tab map. With background true the tab stays out of sight, so the user \
+    can keep using Tabmap, and you can work in several such tabs at once by passing each one's id as `tab` \
+    (calls for different background tabs run side by side). Prefer background tabs unless the user wants to watch. \
+    Every action waits for the page to load and settle before it returns, so you rarely need wait_for. \
     Ask the user before buying or paying for anything, sending messages, emails or posts, deleting things, \
     changing account or security settings, or accepting terms. \
     You never see or type passwords: when a sign-in needs one, the user is asked to do it. \
@@ -214,7 +217,7 @@ enum AgentMCP {
             return result(id: id, [
                 "protocolVersion": version,
                 "capabilities": ["tools": ["listChanged": false]] as [String: Any],
-                "serverInfo": ["name": "tabmap", "title": "Tabmap browser", "version": "0.1.0"],
+                "serverInfo": ["name": "tabmap", "title": "Tabmap browser", "version": "0.2.0"],
                 "instructions": instructions,
             ])
         case "ping":

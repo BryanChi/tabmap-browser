@@ -239,6 +239,11 @@ final class BrowserStore: ObservableObject {
         let page = WebTab(id: id, store: self, configuration: configuration)
         webTabs[id] = page
         loadedIDs.insert(id)
+        // From a page Claude is working in out of sight: the new tab stays out of sight too (AgentTools.swift).
+        if AgentStage.shared.holds(parent), !map.onScreen.contains(parent) {
+            scheduleSave()
+            return page.webView
+        }
         // From the page on stage: zoom out to the map and into the new tab (NewTabHop.swift).
         if !GestureNavigator.shared.hopToNewTab(id, from: parent) { activate(id, commit: true) }
         return page.webView
@@ -648,6 +653,28 @@ final class BrowserStore: ObservableObject {
             }
         }
         return page
+    }
+
+    /// The page for a tab Claude works in (AgentTools.swift), loading it if it is asleep, without
+    /// bringing it on screen.
+    func pageForAgent(_ id: TabID) -> WebTab? {
+        guard map.tab(id)?.isClosed == false else { return nil }
+        return ensureLoaded(id)
+    }
+
+    /// A tab Claude opens out of sight (AgentTools.swift): at the end of `row`, or in a new row.
+    /// The page starts loading; what is on screen stays as it is.
+    func openForAgent(_ url: URL, inRow row: TrailID?) -> TabID? {
+        let now = Date()
+        var id: TabID?
+        if let row, let last = map.trail(row)?.openTabs.last {
+            id = map.openChild(of: last.id, url: url, now: now, activate: false)
+        }
+        if id == nil { id = map.openRoot(url: url, now: now, activate: false) }
+        guard let id else { return nil }
+        ensureLoaded(id, loadStoredPage: false)?.load(url)
+        scheduleSave()
+        return id
     }
 
     /// Unloads a tab's page. With `forget`, also deletes its thumbnail and session.

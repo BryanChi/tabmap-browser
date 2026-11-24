@@ -2,10 +2,15 @@ import AppKit
 import WebKit
 import TabMapCore
 
-/// What Claude can do in Tabmap, as MCP tools. Pages are read with a script in its own content world
-/// (pages can't see it or tamper with it). Clicks, typing and scrolling are real mouse, keyboard and
-/// wheel events handed to the web view, moved and paced the way a person's hand would.
-/// One action runs at a time; the person's Stop takes effect between any two steps.
+/// What Claude can do in Tabmap, as MCP tools. Pages are read from WebKit's accessibility tree (when
+/// macOS allows it, AgentAccessibility.swift) or with a script in its own content world (pages can't
+/// see it or tamper with it). Clicks, typing and scrolling are real mouse, keyboard and wheel events
+/// handed to the page's web view, moved and paced the way a person's hand would.
+///
+/// Claude can work in several tabs at once. Tabs on screen (the page in front, or both halves of a
+/// split) share one queue and show Claude's pointer; every other tab is held off screen
+/// (AgentStage.swift) and has a queue of its own, so the person can keep using Tabmap meanwhile.
+/// The person's Stop takes effect between any two steps, in every tab.
 @MainActor
 final class AgentTools {
     static let shared = AgentTools()
@@ -19,38 +24,75 @@ final class AgentTools {
         case message(String)
     }
 
-    private var tail: Task<Void, Never>?
+    /// A page Claude is about to act on, and whether the person can see it.
+    struct Page {
+        let tab: WebTab
+        let view: WKWebView
+        let placement: AgentPlacement
+        var id: TabID { tab.id }
+        var front: Bool { placement == .front }
+    }
+
+    private enum Ref {
+        case dom(Int)
+        case ax(Int)
+    }
+
+    private var queues: [String: Task<Void, Never>] = [:]
     private let world = WKContentWorld.world(name: "tabmap-agent")
-    /// CSS pixels per pixel of the last screenshot, for clicks by position.
-    private var shotFactor: Double = 1
+    /// CSS pixels per pixel of each tab's last screenshot, for clicks by position.
+    private var shotFactor: [TabID: Double] = [:]
+    /// Claude's pointer in background tabs (window coordinates of their off-screen window).
+    private var pointers: [TabID: NSPoint] = [:]
+    /// The tab Claude works in when a tool doesn't name one: the last one it opened or switched to.
+    private var currentTab: TabID?
     private var eventNumber = 1
 
     // MARK: Entry
 
     func call(_ name: String, _ arguments: [String: Any]) async -> Outcome {
-        let previous = tail
+        guard AgentControl.shared.enabled else {
+            return fail("Claude control is turned off in Tabmap's Settings.")
+        }
+        guard let key = queueKey(name, arguments) else { return await run(name, arguments) }
+        let previous = queues[key]
         let task = Task { @MainActor () -> Outcome in
             await previous?.value
             return await self.run(name, arguments)
         }
-        tail = Task { _ = await task.value }
-        return await task.value
+        let done = Task { _ = await task.value }
+        queues[key] = done
+        let outcome = await task.value
+        if queues[key] == done { queues[key] = nil }
+        return outcome
+    }
+
+    /// Tools that only look run at once; tools that change the map run one at a time; page tools queue per page.
+    private func queueKey(_ name: String, _ args: [String: Any]) -> String? {
+        switch name {
+        case "list_tabs", "list_downloads", "wait_for_user": return nil
+        case "open_url", "switch_tab", "close_tab", "name_row", "show_side_by_side": return "map"
+        default:
+            guard let id = try? targetID(args) else { return "front" }
+            return AgentPlacement.queueKey(for: id.uuidString, placement: placement(of: id))
+        }
     }
 
     private func run(_ name: String, _ args: [String: Any]) async -> Outcome {
-        guard AgentControl.shared.enabled else {
-            return fail("Claude control is turned off in Tabmap's Settings.")
-        }
         do {
             // Once the person has stopped Claude, nothing moves, not even the map.
-            if name != "wait_for_user" && name != "list_tabs" { try AgentControl.shared.checkAllowed() }
+            if !["wait_for_user", "list_tabs", "list_downloads"].contains(name) { try AgentControl.shared.checkAllowed() }
             switch name {
             case "list_tabs": return text(listTabs())
             case "switch_tab": return text(try await switchTab(args))
             case "open_url": return text(try await openURL(args))
+            case "close_tab": return text(try closeTab(args))
+            case "name_row": return text(try nameRow(args))
+            case "show_side_by_side": return text(try await sideBySide(args))
+            case "list_downloads": return text(listDownloads(args))
             case "go": return text(try await go(args))
             case "read_page": return text(try await readPage(args))
-            case "screenshot": return try await screenshot()
+            case "screenshot": return try await screenshot(args)
             case "click": return text(try await click(args, hoverOnly: false))
             case "hover": return text(try await click(args, hoverOnly: true))
             case "type_text": return text(try await typeText(args))
@@ -93,67 +135,136 @@ final class AgentTools {
         trail.tabs.contains { $0.sourceApp == AgentControl.laneApp }
     }
 
-    private func listTabs() -> String {
+    private func claudeRows() -> [Trail] {
+        BrowserStore.shared.map.trails.filter { $0.hasOpenTabs && isClaudeRow($0) }.sorted { $0.recency > $1.recency }
+    }
+
+    private func isClaudeTab(_ id: TabID) -> Bool {
+        BrowserStore.shared.map.trails.contains { trail in isClaudeRow(trail) && trail.tabs.contains { $0.id == id } }
+    }
+
+    /// The tab a tool is about: the one named by `tab`, else Claude's current tab, else the one in front.
+    private func targetID(_ args: [String: Any]) throws -> TabID {
         let map = BrowserStore.shared.map
+        if let given = (args["tab"] as? String)?.lowercased().trimmingCharacters(in: .whitespaces), !given.isEmpty {
+            guard let tab = map.allTabs.first(where: { !$0.isClosed && $0.id.uuidString.lowercased().hasPrefix(given) }) else {
+                throw Failure.message("No open tab has the id \(given). Use list_tabs.")
+            }
+            return tab.id
+        }
+        if let current = currentTab, map.tab(current)?.isClosed == false { return current }
+        if let active = map.activeTabID, map.activeTab?.isBlank == false { return active }
+        throw Failure.message("No page is open. Use open_url first.")
+    }
+
+    private func placement(of id: TabID) -> AgentPlacement {
+        let store = BrowserStore.shared
+        return AgentPlacement.decide(tabIsOnScreen: store.map.onScreen.contains(id), overviewShown: store.overviewShown,
+                                     dockAppInFront: AppDock.shared.isFront)
+    }
+
+    private func listTabs() -> String {
+        let store = BrowserStore.shared
+        let map = store.map
         var lines: [String] = []
         for trail in map.trails.filter(\.hasOpenTabs).sorted(by: { $0.recency > $1.recency }) {
             lines.append("Row: \(rowName(trail))\(isClaudeRow(trail) ? " (your row)" : "")")
             for tab in trail.openTabs {
-                let mark = tab.id == map.activeTabID ? "* " : "  "
-                lines.append("\(mark)\(shortID(tab.id))  \(tab.displayTitle) — \(tab.url?.absoluteString ?? "blank tab")")
+                var marks = ""
+                if map.onScreen.contains(tab.id) && !store.overviewShown { marks += tab.id == map.activeTabID ? "* " : "| " } else { marks += "  " }
+                var notes: [String] = []
+                if tab.id == currentTab { notes.append("your current tab") }
+                if AgentStage.shared.holds(tab.id) && !map.onScreen.contains(tab.id) { notes.append("you are working in it in the background") }
+                let note = notes.isEmpty ? "" : "  [\(notes.joined(separator: "; "))]"
+                lines.append("\(marks)\(shortID(tab.id))  \(tab.displayTitle) — \(tab.url?.absoluteString ?? "blank tab")\(note)")
             }
         }
         if lines.isEmpty { return "No tabs are open." }
         lines.append("")
-        lines.append("* is the tab in front. Use switch_tab with the 8-character id to go to one.")
+        lines.append("* is the tab in front, | the other half of a split view. Every page tool takes `tab` (the 8-character id) to work in any tab, in front or not; without it, tools use your current tab.")
         return lines.joined(separator: "\n")
     }
 
     private func switchTab(_ args: [String: Any]) async throws -> String {
-        guard let given = (args["tab"] as? String)?.lowercased().trimmingCharacters(in: .whitespaces), !given.isEmpty else {
-            throw Failure.message("Give the tab's id from list_tabs.")
-        }
+        guard args["tab"] != nil else { throw Failure.message("Give the tab's id from list_tabs.") }
+        let id = try targetID(args)
         let store = BrowserStore.shared
-        guard let tab = store.map.allTabs.first(where: { !$0.isClosed && $0.id.uuidString.lowercased().hasPrefix(given) }) else {
-            throw Failure.message("No open tab has the id \(given). Use list_tabs.")
+        let title = store.map.tab(id)?.displayTitle ?? "the tab"
+        currentTab = id
+        if args["bring_to_front"] as? Bool ?? true {
+            try AgentControl.shared.begin("Switching to \(title)")
+            if AppDock.shared.isFront { AppDock.shared.sendToBack() }
+            if store.overviewShown {
+                GestureNavigator.shared.closeOverview(showing: id)
+                try await sleep(ms: 450)
+            } else {
+                store.choose(id)
+            }
+            try await sleep(ms: 150)
         }
-        try AgentControl.shared.begin("Switching to \(tab.displayTitle)")
-        store.choose(tab.id)
-        let (page, view) = try await frontPage()
-        await waitForLoad(view, timeout: 15)
-        try await afterAction(page, view)
-        return "Now in front: \(pageLine(view))"
+        let page = try await prepare(id)
+        try AgentControl.shared.begin("Working in \(title)", tab: id, front: page.front)
+        let settled = await settle(page, max: 15)
+        try await afterAction(page)
+        return (page.front ? "Now in front: " : "Now working in (in the background): ") + pageLine(page.view) + busyNote(settled)
     }
 
     // MARK: Pages
 
-    /// The page in front of the map, made visible (dock app sent back, map overview closed).
-    private func frontPage() async throws -> (WebTab, WKWebView) {
+    /// Gets the tab's page ready: loaded, and either on screen (front) or held off screen (background).
+    private func prepare(_ id: TabID) async throws -> Page {
         let store = BrowserStore.shared
-        if AppDock.shared.isFront { AppDock.shared.sendToBack() }
-        if store.overviewShown {
-            GestureNavigator.shared.closeOverview(showing: store.map.activeTabID)
-            try await sleep(ms: 450)
+        let wasLoaded = store.isLoaded(id)
+        guard store.map.tab(id)?.isClosed == false, let tab = store.pageForAgent(id) else {
+            throw Failure.message("That tab is closed. Use list_tabs.")
         }
-        guard let page = store.activeWebTab else {
-            throw Failure.message("No page is open in front. Use open_url or switch_tab first.")
+        var placement = placement(of: id)
+        if placement == .front {
+            // The page stage may take a moment to put a freshly chosen page in the window.
+            var waited = 0
+            while tab.webView.window !== store.window && waited < 20 {
+                try await sleep(ms: 50)
+                waited += 1
+            }
+            if tab.webView.window === store.window {
+                AgentStage.shared.noteOnScreen(tab)
+                if tab.webView.magnification != 1 { tab.webView.magnification = 1 }
+                AgentControl.shared.notePage(tab.webView)
+            } else {
+                placement = .background
+            }
         }
-        var waited = 0
-        while page.webView.window == nil && waited < 20 {
-            try await sleep(ms: 50)
-            waited += 1
+        if placement == .background {
+            AgentStage.shared.host(tab, size: stageSize())
         }
-        guard page.webView.window != nil else {
-            throw Failure.message("The page isn't on screen. Try again in a moment.")
+        AgentStage.shared.touch(id)
+        let page = Page(tab: tab, view: tab.webView, placement: placement)
+        // A tab that was asleep (or still loading) gets its page back before Claude looks at it.
+        if !wasLoaded || tab.webView.isLoading { _ = await settle(page, max: 15) }
+        return page
+    }
+
+    /// Background pages get the size the person's own page has, so layouts match what they'd see.
+    private func stageSize() -> NSSize {
+        let store = BrowserStore.shared
+        if let view = store.activeWebTab?.webView, view.window != nil, view.bounds.width > 400, view.bounds.height > 300 {
+            return view.bounds.size
         }
-        if page.webView.magnification != 1 { page.webView.magnification = 1 }
-        AgentControl.shared.notePage(page.webView)
-        return (page, page.webView)
+        if let size = store.window?.contentView?.bounds.size, size.width > 400 { return size }
+        return NSSize(width: 1280, height: 800)
     }
 
     private func pageLine(_ view: WKWebView) -> String {
         let title = (view.title?.isEmpty == false) ? view.title! : "Untitled"
         return "\(title) — \(view.url?.absoluteString ?? "")"
+    }
+
+    private func begin(_ what: String, _ page: Page) throws {
+        try AgentControl.shared.begin(what, tab: page.id, front: page.front)
+    }
+
+    private func note(_ what: String, _ page: Page) {
+        AgentControl.shared.noteStatus(what, tab: page.id, front: page.front)
     }
 
     private func openURL(_ args: [String: Any]) async throws -> String {
@@ -162,76 +273,141 @@ final class AgentTools {
         guard let url = AddressInterpreter.url(from: raw, searchTemplate: store.map.settings.searchTemplate) else {
             throw Failure.message("\(raw) isn't an address Tabmap can open.")
         }
-        try AgentControl.shared.begin("Opening \(url.host ?? raw)")
         let newTab = args["new_tab"] as? Bool ?? true
-        if newTab {
-            let rows = store.map.trails.filter { $0.hasOpenTabs && isClaudeRow($0) }.sorted { $0.recency > $1.recency }
-            if let last = rows.first?.openTabs.last {
+        let background = args["background"] as? Bool ?? false
+        let id: TabID
+        if newTab && background {
+            try AgentControl.shared.begin("Opening \(url.host ?? raw) in the background", tab: nil, front: false)
+            let row = claudeRows().first
+            guard let opened = store.openForAgent(url, inRow: row?.id) else {
+                throw Failure.message("Tabmap couldn't open a tab.")
+            }
+            if row == nil { store.editMap { $0.markOpened(opened, by: AgentControl.laneApp) } }
+            id = opened
+        } else if newTab {
+            try AgentControl.shared.begin("Opening \(url.host ?? raw)")
+            if let last = claudeRows().first?.openTabs.last {
                 store.openChild(of: last.id, url: url, activate: true)
             } else {
                 store.openFromApp(url, app: AgentControl.laneApp)
             }
+            guard let active = store.map.activeTabID else { throw Failure.message("Tabmap couldn't open a tab.") }
+            id = active
         } else {
-            if AppDock.shared.isFront { AppDock.shared.sendToBack() }
-            store.open(url)
+            let target = try targetID(args)
+            let page = try await prepare(target)
+            try begin("Opening \(url.host ?? raw)", page)
+            page.tab.load(url)
+            id = target
         }
-        let (page, view) = try await frontPage()
-        await waitForLoad(view, timeout: 20)
-        try await afterAction(page, view)
-        return "Opened: \(pageLine(view))"
+        currentTab = id
+        let page = try await prepare(id)
+        try begin("Loading \(url.host ?? raw)", page)
+        let settled = await settle(page, max: 20)
+        try await afterAction(page)
+        let place = page.front ? "" : " (in the background, tab \(shortID(id)); the user can keep using Tabmap)"
+        return "Opened\(place): \(pageLine(page.view))" + busyNote(settled)
     }
 
     private func go(_ args: [String: Any]) async throws -> String {
         let action = (args["action"] as? String ?? "").lowercased()
-        let (page, view) = try await frontPage()
+        let page = try await prepare(try targetID(args))
+        let view = page.view
         switch action {
         case "back":
             guard view.canGoBack else { throw Failure.message("There is no earlier page in this tab.") }
-            try AgentControl.shared.begin("Going back")
+            try begin("Going back", page)
             view.goBack()
         case "forward":
             guard view.canGoForward else { throw Failure.message("There is no later page in this tab.") }
-            try AgentControl.shared.begin("Going forward")
+            try begin("Going forward", page)
             view.goForward()
         case "reload":
-            try AgentControl.shared.begin("Reloading")
+            try begin("Reloading", page)
             view.reload()
         default:
             throw Failure.message("action must be back, forward or reload.")
         }
-        await waitForLoad(view, timeout: 20)
-        try await afterAction(page, view)
-        return "Now showing: \(pageLine(view))"
+        let settled = await settle(page, max: 20)
+        try await afterAction(page)
+        return "Now showing: \(pageLine(view))" + busyNote(settled)
     }
 
-    private func waitForLoad(_ view: WKWebView, timeout: Double) async {
-        try? await Task.sleep(nanoseconds: 250_000_000)
+    // MARK: Waiting for the page
+
+    /// Waits for the page to load, then for it to settle: no new network requests finishing and no
+    /// content changing for `quiet` ms. Returns false when it was still busy at `max` seconds.
+    /// (Requests that never finish, like live updates, don't hold it up: only finished ones count.)
+    private func settle(_ page: Page, max: Double, quiet: Int = 500) async -> Bool {
         let start = Date()
-        while view.isLoading && Date().timeIntervalSince(start) < timeout {
+        try? await Task.sleep(nanoseconds: 120_000_000)
+        while page.view.isLoading && Date().timeIntervalSince(start) < max {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
-        try? await Task.sleep(nanoseconds: 200_000_000)
+        for _ in 0..<3 {
+            let left = max - Date().timeIntervalSince(start)
+            guard left > 0.2 else { return !page.view.isLoading }
+            let result = try? await page.view.callAsyncJavaScript(Self.settleScript,
+                                                                  arguments: ["args": ["quiet": quiet, "max": Int(left * 1000)]],
+                                                                  in: nil, contentWorld: world) as? [String: Any]
+            if let result { return result["settled"] as? Bool ?? false }
+            // The page navigated mid-wait: wait for the new one.
+            while page.view.isLoading && Date().timeIntervalSince(start) < max {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+        return !page.view.isLoading
+    }
+
+    private func busyNote(_ settled: Bool) -> String {
+        settled ? "" : " (The page was still loading or changing when this returned; wait_for can wait longer.)"
     }
 
     // MARK: Reading
 
     private func readPage(_ args: [String: Any]) async throws -> String {
-        let (page, view) = try await frontPage()
-        try AgentControl.shared.begin("Reading the page")
+        let page = try await prepare(try targetID(args))
+        try begin("Reading the page", page)
         let maxChars = min(max(int(args["max_chars"]) ?? 20000, 1000), 100_000)
         let interactiveOnly = args["interactive_only"] as? Bool ?? false
-        let result = try await js(Self.readScript, ["maxChars": maxChars, "interactiveOnly": interactiveOnly], in: view)
-        try await afterAction(page, view)
-        guard let dict = result as? [String: Any], let text = dict["text"] as? String else {
-            throw Failure.message("The page couldn't be read.")
+        let mode = (args["mode"] as? String ?? "auto").lowercased()
+        let find = (args["find"] as? String)?.lowercased().trimmingCharacters(in: .whitespaces)
+        var body: String?
+        var how = "the page's HTML"
+        if mode != "dom", AgentAccessibility.shared.isAvailable {
+            body = await AgentAccessibility.shared.read(page.tab, maxChars: maxChars, interactiveOnly: interactiveOnly)
+            if body != nil { how = "the accessibility tree" }
+        } else if mode == "accessibility" {
+            how = "the page's HTML (Tabmap isn't allowed to use macOS accessibility; the user can allow it in Tabmap's Settings)"
         }
-        return text + "\n\nUse the [numbers] with click, type_text, hover, scroll or select_option."
+        if body == nil {
+            let result = try await js(Self.readScript, ["maxChars": maxChars, "interactiveOnly": interactiveOnly], in: page.view)
+            guard let dict = result as? [String: Any], let text = dict["text"] as? String else {
+                throw Failure.message("The page couldn't be read.")
+            }
+            // The script starts with its own title, address and viewport lines; the header below has them.
+            body = text.components(separatedBy: "\n").enumerated().filter { index, line in
+                !(index < 3 && (line.hasPrefix("Title: ") || line.hasPrefix("URL: ") || line.hasPrefix("Viewport ")))
+            }.map(\.element).joined(separator: "\n")
+        }
+        try await afterAction(page)
+        var lines = body!.components(separatedBy: "\n")
+        if let find, !find.isEmpty {
+            lines = lines.filter { $0.lowercased().contains(find) }
+            if lines.isEmpty { lines = ["Nothing on the page matches “\(find)”."] }
+        }
+        let viewport = try await js("return [innerWidth, innerHeight, Math.round(scrollY), Math.max(0, document.documentElement.scrollHeight - innerHeight)];", in: page.view) as? [Double] ?? []
+        var head = ["Tab \(shortID(page.id))\(page.front ? "" : " (background)"): \(pageLine(page.view))"]
+        if viewport.count == 4 { head.append("Viewport \(Int(viewport[0]))×\(Int(viewport[1])), scrolled to \(Int(viewport[2])) of \(Int(viewport[3])) px. Read from \(how).") }
+        return (head + [""] + lines).joined(separator: "\n")
+            + "\n\nUse the [numbers] with click, type_text, hover, scroll or select_option (pass the same tab)."
     }
 
-    private func screenshot() async throws -> Outcome {
-        let (page, view) = try await frontPage()
-        try AgentControl.shared.begin("Looking at the page")
-        try await afterAction(page, view)
+    private func screenshot(_ args: [String: Any]) async throws -> Outcome {
+        let page = try await prepare(try targetID(args))
+        let view = page.view
+        try begin("Looking at the page", page)
+        try await afterAction(page)
         let viewport = try await viewportSize(view)
         let width = min(viewport.width, 1600)
         let configuration = WKSnapshotConfiguration()
@@ -253,10 +429,10 @@ final class AgentTools {
         guard let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.75]) else {
             throw Failure.message("The screenshot couldn't be encoded.")
         }
-        shotFactor = viewport.width / width
+        shotFactor[page.id] = viewport.width / width
         return Outcome(content: [
             ["type": "image", "data": data.base64EncodedString(), "mimeType": "image/jpeg"],
-            ["type": "text", "text": "Screenshot of \(pageLine(view)), \(pixelsWide)×\(pixelsHigh). To click or hover a spot, pass x and y in this image's pixels (read_page refs are more reliable)."],
+            ["type": "text", "text": "Screenshot of tab \(shortID(page.id)): \(pageLine(view)), \(pixelsWide)×\(pixelsHigh). It shows only this page, not the user's screen. To click or hover a spot, pass x and y in this image's pixels (read_page refs are more reliable)."],
         ], isError: false)
     }
 
@@ -273,9 +449,22 @@ final class AgentTools {
         var covered: String?
     }
 
+    private func parseRef(_ value: Any?) -> Ref? {
+        if let s = value as? String {
+            let t = s.trimmingCharacters(in: CharacterSet(charactersIn: "[] ")).lowercased()
+            if t.hasPrefix("a"), let n = Int(t.dropFirst()) { return .ax(n) }
+            if let n = Int(t) { return .dom(n) }
+            return nil
+        }
+        if let n = int(value) { return .dom(n) }
+        return nil
+    }
+
     /// Where an element (by ref) or a screenshot position is, scrolled into view with the wheel if needed.
-    private func findTarget(_ args: [String: Any], in view: WKWebView) async throws -> Target {
-        if let ref = int(args["ref"]) {
+    private func findTarget(_ args: [String: Any], in page: Page) async throws -> Target {
+        let view = page.view
+        switch parseRef(args["ref"]) {
+        case .dom(let ref)?:
             var info = try await locate(ref, in: view)
             if !(info["inView"] as? Bool ?? false) {
                 // Scroll to it the way a person would: with the wheel, a screen at a time.
@@ -285,7 +474,7 @@ final class AgentTools {
                     let dy = (top + h / 2) - vh / 2
                     let scale = view.bounds.width / max(1, vw)
                     let center = windowPoint(cssX: vw / 2, cssY: vh / 2, viewportWidth: vw, viewportHeight: vh, in: view)
-                    try await movePointer(to: center, in: view)
+                    try await movePointer(to: center, in: page)
                     try await wheel(dx: 0, dy: max(-vh * 1.5, min(vh * 1.5, dy)) * scale, at: center, in: view)
                     try await sleep(ms: 220)
                     info = try await locate(ref, in: view)
@@ -304,16 +493,51 @@ final class AgentTools {
                           viewportWidth: double(info["vw"]) ?? 1, viewportHeight: double(info["vh"]) ?? 1,
                           description: "[\(ref)] \(role)\(name.isEmpty ? "" : " \"\(name)\"")",
                           role: role, type: info["type"] as? String ?? "", covered: info["covered"] as? String)
+        case .ax(let ref)?:
+            let ax = AgentAccessibility.shared
+            guard var found = ax.locate(ref, in: page.tab) else {
+                throw Failure.message("Element [a\(ref)] is gone from the page. Call read_page again for fresh numbers.")
+            }
+            let bounds = view.bounds
+            func inView(_ p: NSPoint) -> Bool { p.x >= 0 && p.y >= 0 && p.x <= bounds.width && p.y <= bounds.height }
+            if !inView(found.point) {
+                let viewport = try await viewportSize(view)
+                let center = windowPoint(cssX: viewport.width / 2, cssY: viewport.height / 2,
+                                         viewportWidth: viewport.width, viewportHeight: viewport.height, in: view)
+                for _ in 0..<8 where !inView(found.point) {
+                    let dy = found.point.y - bounds.height / 2
+                    try await movePointer(to: center, in: page)
+                    try await wheel(dx: 0, dy: max(-bounds.height * 1.5, min(bounds.height * 1.5, dy)), at: center, in: view)
+                    try await sleep(ms: 220)
+                    guard let again = ax.locate(ref, in: page.tab) else { break }
+                    found = again
+                }
+                if !inView(found.point) {
+                    ax.scrollToVisible(ref, in: page.tab)
+                    try await sleep(ms: 200)
+                    if let again = ax.locate(ref, in: page.tab) { found = again }
+                }
+            }
+            let viewport = try await viewportSize(view)
+            let toCSS = viewport.width / max(1, Double(bounds.width))
+            let kind = AXOutline.roleName(found.role, subrole: found.subrole) ?? "element"
+            return Target(x: Double(found.point.x) * toCSS, y: Double(found.point.y) * toCSS,
+                          viewportWidth: viewport.width, viewportHeight: viewport.height,
+                          description: "[a\(ref)] \(kind)", role: kind,
+                          type: found.subrole == "AXSecureTextField" ? "password" : "", covered: nil)
+        case nil:
+            break
         }
         if let x = double(args["x"]), let y = double(args["y"]) {
             let viewport = try await viewportSize(view)
-            return Target(x: x * shotFactor, y: y * shotFactor, viewportWidth: viewport.width, viewportHeight: viewport.height,
+            let factor = shotFactor[page.id] ?? 1
+            return Target(x: x * factor, y: y * factor, viewportWidth: viewport.width, viewportHeight: viewport.height,
                           description: "the spot at \(Int(x)), \(Int(y))", role: "", type: "", covered: nil)
         }
         throw Failure.message("Give a ref from read_page, or x and y from a screenshot.")
     }
 
-    /// Pointer-arrival events at a viewport point, for when the window is in the background.
+    /// Pointer-arrival events at a viewport point, for when the window isn't active (background tabs).
     private static let hoverScript = """
         let el = document.elementFromPoint(args.x, args.y);
         while (el && el.shadowRoot) {
@@ -345,9 +569,10 @@ final class AgentTools {
     }
 
     private func click(_ args: [String: Any], hoverOnly: Bool) async throws -> String {
-        let (page, view) = try await frontPage()
-        try AgentControl.shared.begin(hoverOnly ? "Pointing" : "Clicking")
-        let target = try await findTarget(args, in: view)
+        let page = try await prepare(try targetID(args))
+        let view = page.view
+        try begin(hoverOnly ? "Pointing" : "Clicking", page)
+        let target = try await findTarget(args, in: page)
         if !hoverOnly {
             if target.role == "select" {
                 throw Failure.message("\(target.description) is a drop-down menu. Use select_option instead of clicking it.")
@@ -356,38 +581,46 @@ final class AgentTools {
                 throw Failure.message("\(target.description) picks a file from the Mac. Claude can't choose files; ask the user to do it.")
             }
         }
-        AgentControl.shared.noteStatus((hoverOnly ? "Pointing at " : "Clicking ") + target.description)
+        note((hoverOnly ? "Pointing at " : "Clicking ") + target.description, page)
         let point = windowPoint(cssX: target.x, cssY: target.y, viewportWidth: target.viewportWidth,
                                 viewportHeight: target.viewportHeight, in: view)
         let beforeURL = view.url
-        let beforeTab = BrowserStore.shared.map.activeTabID
-        try await movePointer(to: point, in: view)
+        let beforeTabs = Set(BrowserStore.shared.map.allTabs.filter { !$0.isClosed }.map(\.id))
+        let beforeActive = BrowserStore.shared.map.activeTabID
+        try await movePointer(to: point, in: page)
         if hoverOnly {
             var note = ""
-            if !(NSApp.isActive && view.window?.isKeyWindow == true) {
+            if !(page.front && NSApp.isActive && view.window?.isKeyWindow == true) {
                 // WebKit only hit-tests mouse moves while the window is active; in a background window
                 // they just update scrollbars. Tell the page the pointer arrived with DOM events instead.
                 _ = try await js(Self.hoverScript, ["x": target.x, "y": target.y], in: view)
-                note = " Tabmap is in the background, so the page got hover events but CSS hover styles may not show."
+                note = " The page got hover events, but CSS hover styles may not show because \(page.front ? "Tabmap is in the background" : "this tab is out of sight")."
             }
             try await sleep(ms: 350)
             return "Pointer is over \(target.description).\(note)"
         }
         try await press(at: point, in: view, double: args["double"] as? Bool ?? false)
-        try await sleep(ms: 400)
+        try await sleep(ms: 150)
         var notes: [String] = []
         if let covered = target.covered {
             notes.append("Something else (\(covered)) was on top of it, so the click may have landed there.")
         }
-        if BrowserStore.shared.map.activeTabID != beforeTab {
-            let (newPage, newView) = try await frontPage()
-            await waitForLoad(newView, timeout: 15)
-            try await afterAction(newPage, newView)
-            notes.append("It opened a new tab, now in front: \(pageLine(newView))")
+        let store = BrowserStore.shared
+        let opened = store.map.allTabs.filter { !$0.isClosed && !beforeTabs.contains($0.id) }.map(\.id)
+        if let newTab = opened.last {
+            // A link that opens a new tab: carry on there.
+            currentTab = newTab
+            let newPage = try await prepare(newTab)
+            let settled = await settle(newPage, max: 15)
+            try await afterAction(newPage)
+            let place = newPage.front ? "now in front" : "in the background"
+            notes.append("It opened a new tab \(shortID(newTab)) (\(place), now your current tab): \(pageLine(newPage.view))" + busyNote(settled))
         } else {
-            if view.isLoading { await waitForLoad(view, timeout: 15) }
-            try await afterAction(page, view)
+            if store.map.activeTabID != beforeActive && page.front { notes.append("The tab in front changed.") }
+            let settled = await settle(page, max: 8, quiet: 400)
+            try await afterAction(page)
             if view.url != beforeURL { notes.append("The page is now: \(pageLine(view))") }
+            if !settled { notes.append(busyNote(false).trimmingCharacters(in: .whitespaces)) }
         }
         return (["Clicked \(target.description)."] + notes).joined(separator: " ")
     }
@@ -396,20 +629,21 @@ final class AgentTools {
 
     private func typeText(_ args: [String: Any]) async throws -> String {
         guard let text = args["text"] as? String else { throw Failure.message("Give the text to type.") }
-        let (page, view) = try await frontPage()
-        try AgentControl.shared.begin("Typing")
+        let page = try await prepare(try targetID(args))
+        let view = page.view
+        try begin("Typing", page)
         if args["ref"] != nil {
-            let target = try await findTarget(args, in: view)
-            if target.type == "password" || target.role == "password" { try handOverPassword(page, view) }
-            AgentControl.shared.noteStatus("Typing into \(target.description)")
+            let target = try await findTarget(args, in: page)
+            if target.type == "password" || target.role == "password" { try handOverPassword(page) }
+            note("Typing into \(target.description)", page)
             let point = windowPoint(cssX: target.x, cssY: target.y, viewportWidth: target.viewportWidth,
                                     viewportHeight: target.viewportHeight, in: view)
-            try await movePointer(to: point, in: view)
+            try await movePointer(to: point, in: page)
             try await press(at: point, in: view, double: false)
             try await sleep(ms: 150)
         }
         if try await js("const a = deepActive(); return !!(a && a.type === 'password');", in: view) as? Bool == true {
-            try handOverPassword(page, view)
+            try handOverPassword(page)
         }
         if args["clear"] as? Bool == true {
             try await key(AgentKey(keyCode: 0, characters: "a", modifiers: [.command]), in: view)
@@ -433,72 +667,79 @@ final class AgentTools {
         if args["submit"] as? Bool == true {
             let before = view.url
             try await key(AgentKey(keyCode: 36, characters: "\r"), in: view)
-            try await sleep(ms: 400)
-            await waitForLoad(view, timeout: 15)
+            let settled = await settle(page, max: 15)
             reply += " Pressed Enter."
             if view.url != before { reply += " The page is now: \(pageLine(view))" }
+            reply += busyNote(settled)
         }
-        try await afterAction(page, view)
+        try await afterAction(page)
         return reply
     }
 
-    private func handOverPassword(_ page: WebTab, _ view: WKWebView) throws -> Never {
-        AgentControl.shared.handOver("Sign-in needs your password", tab: page.id, site: view.url?.host, clearsItself: false)
-        throw AgentControl.Refusal.needsYou("this is a password field, and Claude never types passwords. The user has been asked to sign in")
+    private func handOverPassword(_ page: Page) throws -> Never {
+        let host = page.view.url?.host
+        let saved = host.map { PasswordStore.shared.candidates(forHost: $0).count } ?? 0
+        let reason = saved > 0 ? "Sign-in needs your password (Tabmap has \(saved) saved login\(saved == 1 ? "" : "s") for this site)"
+                               : "Sign-in needs your password"
+        AgentControl.shared.handOver(reason, tab: page.id, site: host, clearsItself: false)
+        let hint = saved > 0 ? " Tabmap has a saved login for this site, so they can fill it from the password pill." : ""
+        throw AgentControl.Refusal.needsYou("this is a password field, and Claude never types passwords. The user has been asked to sign in\(page.front ? "" : " (the tab is in the background; the notification and the pill's Show button bring it up)")\(hint)")
     }
 
     private func pressKey(_ args: [String: Any]) async throws -> String {
         guard let spec = args["key"] as? String, let parsed = AgentKey.parse(spec) else {
             throw Failure.message("Unknown key. Use names like Enter, Tab, Escape, Backspace, ArrowDown, PageDown, or combos like cmd+a.")
         }
-        let (page, view) = try await frontPage()
-        try AgentControl.shared.begin("Pressing \(spec)")
+        let page = try await prepare(try targetID(args))
+        let view = page.view
+        try begin("Pressing \(spec)", page)
         let before = view.url
         try await key(parsed, in: view)
-        try await sleep(ms: 300)
-        if view.isLoading { await waitForLoad(view, timeout: 15) }
-        try await afterAction(page, view)
-        return "Pressed \(spec)." + (view.url != before ? " The page is now: \(pageLine(view))" : "")
+        let settled = await settle(page, max: 8, quiet: 300)
+        try await afterAction(page)
+        return "Pressed \(spec)." + (view.url != before ? " The page is now: \(pageLine(view))" : "") + busyNote(settled)
     }
 
     private func selectOption(_ args: [String: Any]) async throws -> String {
         guard let ref = int(args["ref"]), let option = args["option"] as? String else {
-            throw Failure.message("Give the drop-down's ref and the option to pick.")
+            throw Failure.message("Give the drop-down's ref (a plain number from read_page with mode dom) and the option to pick.")
         }
-        let (page, view) = try await frontPage()
-        try AgentControl.shared.begin("Choosing \(option)")
-        let target = try await findTarget(["ref": ref], in: view)
+        let page = try await prepare(try targetID(args))
+        let view = page.view
+        try begin("Choosing \(option)", page)
+        let target = try await findTarget(["ref": ref], in: page)
         let point = windowPoint(cssX: target.x, cssY: target.y, viewportWidth: target.viewportWidth,
                                 viewportHeight: target.viewportHeight, in: view)
-        try await movePointer(to: point, in: view)
+        try await movePointer(to: point, in: page)
         // A real click would open the system menu, which holds up everything until it closes.
         let result = try await js(Self.selectScript, ["ref": ref, "option": option], in: view) as? [String: Any] ?? [:]
         if let error = result["error"] as? String {
             let options = (result["options"] as? [String])?.joined(separator: " | ") ?? ""
             throw Failure.message("Couldn't choose \"\(option)\": \(error).\(options.isEmpty ? "" : " Options: \(options)")")
         }
-        try await sleep(ms: 300)
-        try await afterAction(page, view)
+        _ = await settle(page, max: 5, quiet: 300)
+        try await afterAction(page)
         return "Chose \"\(result["chosen"] as? String ?? option)\" in \(target.description)."
     }
 
     // MARK: Scrolling
 
     private func scroll(_ args: [String: Any]) async throws -> String {
-        let (page, view) = try await frontPage()
+        let page = try await prepare(try targetID(args))
+        let view = page.view
         let direction = (args["direction"] as? String ?? "down").lowercased()
-        try AgentControl.shared.begin("Scrolling \(direction)")
+        try begin("Scrolling \(direction)", page)
         let amount = min(max(double(args["amount"]) ?? 0.8, 0.1), 10)
         let viewport = try await viewportSize(view)
         let scale = view.bounds.width / max(1, viewport.width)
         var point = windowPoint(cssX: viewport.width / 2, cssY: viewport.height / 2,
                                 viewportWidth: viewport.width, viewportHeight: viewport.height, in: view)
         if args["ref"] != nil {
-            let target = try await findTarget(args, in: view)
+            let target = try await findTarget(args, in: page)
             point = windowPoint(cssX: target.x, cssY: target.y, viewportWidth: target.viewportWidth,
                                 viewportHeight: target.viewportHeight, in: view)
         }
-        try await movePointer(to: point, in: view)
+        try await movePointer(to: point, in: page)
         let before = try await js("return [scrollX, scrollY];", in: view) as? [Double]
         let distance = amount * (direction == "left" || direction == "right" ? viewport.width : viewport.height) * scale
         switch direction {
@@ -508,8 +749,9 @@ final class AgentTools {
         case "left": try await wheel(dx: -distance, dy: 0, at: point, in: view)
         default: throw Failure.message("direction must be up, down, left or right.")
         }
-        try await sleep(ms: 250)
-        try await afterAction(page, view)
+        // Long lists often load more when you reach their end.
+        _ = await settle(page, max: 3, quiet: 300)
+        try await afterAction(page)
         let after = try await js("return [scrollX, scrollY, document.documentElement.scrollHeight, innerHeight];", in: view) as? [Double]
         guard let after, after.count == 4 else { return "Scrolled \(direction)." }
         let moved = before.map { $0 != Array(after.prefix(2)) } ?? true
@@ -523,27 +765,37 @@ final class AgentTools {
     // MARK: Waiting
 
     private func waitFor(_ args: [String: Any]) async throws -> String {
-        let (page, view) = try await frontPage()
-        let wanted = args["text"] as? String
-        try AgentControl.shared.begin(wanted.map { "Waiting for “\($0)”" } ?? "Waiting for the page")
+        let page = try await prepare(try targetID(args))
+        let view = page.view
+        let wanted = (args["text"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let gone = (args["gone"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        try begin(wanted.map { "Waiting for “\($0)”" } ?? gone.map { "Waiting for “\($0)” to go" } ?? "Waiting for the page to settle", page)
         let timeout = min(max(double(args["seconds"]) ?? 10, 0.5), 60)
         let start = Date()
+        if wanted == nil && gone == nil {
+            let settled = await settle(page, max: timeout)
+            try await afterAction(page)
+            return settled ? "The page has loaded and settled: \(pageLine(view))"
+                           : "Still loading or changing after \(Int(timeout)) seconds: \(pageLine(view))"
+        }
         while Date().timeIntervalSince(start) < timeout {
             try AgentControl.shared.checkAllowed()
             if !view.isLoading {
-                guard let wanted else { break }
-                let found = try await js("return !!(document.body && document.body.innerText.includes(args.t));",
-                                         ["t": wanted], in: view) as? Bool ?? false
-                if found {
-                    try await afterAction(page, view)
-                    return "Found “\(wanted)” on \(pageLine(view))."
+                let found = try? await js("""
+                    const t = document.body ? document.body.innerText : '';
+                    return [args.w === null || t.includes(args.w), args.g === null || !t.includes(args.g)];
+                    """, ["w": wanted ?? NSNull(), "g": gone ?? NSNull()], in: view) as? [Bool]
+                if let found, found.count == 2, found[0], found[1] {
+                    try await afterAction(page)
+                    if let wanted { return "Found “\(wanted)” on \(pageLine(view))." }
+                    return "“\(gone!)” is gone from \(pageLine(view))."
                 }
             }
             try await sleep(ms: 250)
         }
-        try await afterAction(page, view)
+        try await afterAction(page)
         if let wanted { return "“\(wanted)” didn't appear within \(Int(timeout)) seconds. Page: \(pageLine(view))" }
-        return view.isLoading ? "Still loading after \(Int(timeout)) seconds." : "Page has loaded: \(pageLine(view))"
+        return "“\(gone!)” was still there after \(Int(timeout)) seconds. Page: \(pageLine(view))"
     }
 
     private func waitForUser(_ args: [String: Any]) async throws -> String {
@@ -560,7 +812,8 @@ final class AgentTools {
             }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             // A human check that has gone away by itself (solved) lets Claude carry on without Done.
-            if control.handOverClearsItself, let page = BrowserStore.shared.activeWebTab {
+            if control.handOverClearsItself, let tab = control.waitingTab ?? BrowserStore.shared.map.activeTabID,
+               let page = BrowserStore.shared.page(for: tab) {
                 if try await detectHumanCheck(page.webView) == nil {
                     clearChecks += 1
                     if clearChecks >= 2 { control.personDone() }
@@ -572,13 +825,79 @@ final class AgentTools {
         return "Still waiting for the user after \(Int(timeout)) seconds. Call wait_for_user again, or ask them."
     }
 
+    // MARK: The map, rows and downloads
+
+    private func closeTab(_ args: [String: Any]) throws -> String {
+        guard args["tab"] != nil else { throw Failure.message("Give the tab's id from list_tabs.") }
+        let id = try targetID(args)
+        guard isClaudeTab(id) else {
+            throw Failure.message("That tab is in one of the user's own rows. You can only close tabs in your rows; ask the user about theirs.")
+        }
+        try AgentControl.shared.begin("Closing a tab")
+        let title = BrowserStore.shared.map.tab(id)?.displayTitle ?? "the tab"
+        BrowserStore.shared.closeTab(id)
+        if currentTab == id { currentTab = nil }
+        AgentAccessibility.shared.forget(id)
+        return "Closed \(title). It can be reopened from the map like any closed tab."
+    }
+
+    private func nameRow(_ args: [String: Any]) throws -> String {
+        guard let name = args["name"] as? String else { throw Failure.message("Give the row's new name.") }
+        let id = try targetID(args)
+        let store = BrowserStore.shared
+        guard let trail = store.map.trails.first(where: { $0.tabs.contains { $0.id == id } }), isClaudeRow(trail) else {
+            throw Failure.message("That tab is in one of the user's own rows. You can only name your rows.")
+        }
+        try AgentControl.shared.begin("Naming a row")
+        store.editMap { $0.rename(trail: trail.id, to: name) }
+        return name.trimmingCharacters(in: .whitespaces).isEmpty ? "The row is named automatically again." : "Named the row “\(name)”."
+    }
+
+    private func sideBySide(_ args: [String: Any]) async throws -> String {
+        let first = try targetID(args)
+        let second = try targetID(["tab": args["other_tab"] as? String ?? ""])
+        let store = BrowserStore.shared
+        guard store.map.canSplit(first, second) else {
+            throw Failure.message("Split view needs two neighbouring tabs in the same row. Open the second page from the first (open_url with new_tab true puts it next to your last tab).")
+        }
+        try AgentControl.shared.begin("Showing two tabs side by side")
+        if AppDock.shared.isFront { AppDock.shared.sendToBack() }
+        if store.overviewShown { GestureNavigator.shared.closeOverview(showing: first); try await sleep(ms: 450) }
+        store.splitTabs(first, with: second)
+        currentTab = first
+        return "Showing \(shortID(first)) and \(shortID(second)) side by side. Both are on screen now; pass `tab` to act in either."
+    }
+
+    private func listDownloads(_ args: [String: Any]) -> String {
+        let downloads = DownloadStore.shared
+        let limit = min(max(int(args["limit"]) ?? 10, 1), 50)
+        let records = downloads.ledger.records.sorted { $0.startedAt > $1.startedAt }.prefix(limit)
+        if records.isEmpty { return "No downloads." }
+        let formatter = ByteCountFormatter()
+        return records.map { record in
+            var line = "\(record.filename) — "
+            switch record.state {
+            case .inProgress:
+                let share = downloads.progress[record.id].map { " \(Int($0 * 100))%" } ?? ""
+                line += "downloading\(share)"
+            case .finished: line += "finished" + (downloads.fileExists(record) ? "" : " (file since moved or deleted)")
+            case .failed: line += "failed"
+            case .cancelled: line += "cancelled"
+            }
+            if let bytes = record.byteCount { line += ", \(formatter.string(fromByteCount: bytes))" }
+            if let path = record.filePath { line += ", saved at \(path)" }
+            if let page = record.pageURL { line += ", from \(page.host ?? page.absoluteString)" }
+            return line
+        }.joined(separator: "\n")
+    }
+
     // MARK: After each action
 
     /// Stops and hands the page to the person when it asks whether they're human.
-    private func afterAction(_ page: WebTab, _ view: WKWebView) async throws {
-        if let kind = try await detectHumanCheck(view) {
+    private func afterAction(_ page: Page) async throws {
+        if let kind = try await detectHumanCheck(page.view) {
             let reason = "Human check (\(kind))"
-            AgentControl.shared.handOver(reason, tab: page.id, site: view.url?.host, clearsItself: true)
+            AgentControl.shared.handOver(reason, tab: page.id, site: page.view.url?.host, clearsItself: true)
             throw AgentControl.Refusal.needsYou("the page shows a \(kind), which only the user can answer")
         }
         try AgentControl.shared.checkAllowed()
@@ -633,17 +952,20 @@ final class AgentTools {
         }
     }
 
-    /// Glides Claude's pointer to `target` (window coordinates) along a gentle curve.
-    private func movePointer(to target: NSPoint, in view: WKWebView) async throws {
+    /// Glides Claude's pointer to `target` (window coordinates) along a gentle curve. On screen, the
+    /// person sees it move; in a background tab only the page does.
+    private func movePointer(to target: NSPoint, in page: Page) async throws {
         let control = AgentControl.shared
-        let start = control.pointer ?? view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+        let view = page.view
+        let middle = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+        let start = (page.front ? control.pointer : pointers[page.id]) ?? middle
         let path = PointerPath.points(from: (x: Double(start.x), y: Double(start.y)),
                                       to: (x: Double(target.x), y: Double(target.y)))
         for step in path {
             let point = NSPoint(x: step.x, y: step.y)
             mouse(.mouseMoved, at: point, in: view)
-            control.movePointer(to: point, in: view)
-            try await sleep(ms: 12)
+            if page.front { control.movePointer(to: point, in: view) } else { pointers[page.id] = point }
+            try await sleep(ms: page.front ? 12 : 6)
         }
     }
 
@@ -742,36 +1064,66 @@ final class AgentTools {
 
     // MARK: Tool list
 
+    private static let tabParam: [String: Any] = [
+        "type": "string",
+        "description": "Which tab (its id from list_tabs or open_url). It can be in the background: you can work in several tabs at once while the user uses others. Default: your current tab.",
+    ]
+    private static let refParam: [String: Any] = [
+        "type": ["integer", "string"],
+        "description": "An element's number from read_page: 12 for [12], or \"a12\" for [a12].",
+    ]
+
+    private static func pageTool(_ name: String, _ description: String, _ properties: [String: Any],
+                                 required: [String] = []) -> [String: Any] {
+        var all = properties
+        all["tab"] = tabParam
+        return tool(name, description, all, required: required)
+    }
+
     static let definitions: [[String: Any]] = [
-        tool("list_tabs", "List the open tabs in Tabmap's map, row by row, with ids for switch_tab. The tab in front is marked *.", [:]),
-        tool("switch_tab", "Bring an open tab to the front.", ["tab": ["type": "string", "description": "The tab's id from list_tabs (the first few characters are enough)."]], required: ["tab"]),
-        tool("open_url", "Open an address (or search words) and wait for it to load. By default it opens in a new tab in your own row of the map, so the user's tabs are left alone.",
+        tool("list_tabs", "List the open tabs in Tabmap's map, row by row, with ids. Marks the tab in front, split view, your current tab and tabs you are working in out of sight.", [:]),
+        tool("open_url", "Open an address (or search words) and wait until the page has loaded and settled. By default it opens in a new tab in your own row and brings it to the front. With background true, the tab opens out of sight so the user can keep using Tabmap, and you work in it by passing its id as `tab`; open several to work in parallel.",
              ["url": ["type": "string", "description": "An address, or words to search for."],
-              "new_tab": ["type": "boolean", "description": "false loads it in the tab in front instead. Default true."]], required: ["url"]),
-        tool("go", "Back, forward or reload in the tab in front.", ["action": ["type": "string", "enum": ["back", "forward", "reload"]] as [String: Any]], required: ["action"]),
-        tool("read_page", "Read the page in front as text: headings, text, and numbered [ref] elements you can click, type into, hover, scroll or choose from. Password fields are shown but never their contents.",
-             ["interactive_only": ["type": "boolean", "description": "Only list the elements you can act on. Default false."],
-              "max_chars": ["type": "integer", "description": "Longest answer, default 20000."]]),
-        tool("screenshot", "See what the page in front looks like right now.", [:]),
-        tool("click", "Click an element (by ref from read_page) or a spot (x, y in the last screenshot's pixels) with a real mouse click. Scrolls it into view first.",
-             ["ref": ["type": "integer"], "x": ["type": "number"], "y": ["type": "number"],
-              "double": ["type": "boolean", "description": "Double-click. Default false."]]),
-        tool("hover", "Move the pointer over an element or spot without clicking (opens hover menus and tooltips).",
-             ["ref": ["type": "integer"], "x": ["type": "number"], "y": ["type": "number"]]),
-        tool("type_text", "Type text with real key presses, into the element given by ref (clicked first) or else into whatever has focus. Never use it for passwords: the user is asked to sign in themselves.",
-             ["text": ["type": "string"], "ref": ["type": "integer"],
-              "clear": ["type": "boolean", "description": "Select all and delete what is there first. Default false."],
-              "submit": ["type": "boolean", "description": "Press Enter afterwards. Default false."]], required: ["text"]),
-        tool("press_key", "Press one key or shortcut: Enter, Tab, Escape, Backspace, ArrowUp/Down/Left/Right, PageUp/PageDown, Home, End, Space, or combos like cmd+a, shift+Tab.",
-             ["key": ["type": "string"]], required: ["key"]),
-        tool("scroll", "Scroll with the mouse wheel, over the page or over a part of it given by ref.",
-             ["direction": ["type": "string", "enum": ["up", "down", "left", "right"]] as [String: Any],
-              "amount": ["type": "number", "description": "How far, in screens. Default 0.8."],
-              "ref": ["type": "integer", "description": "Scroll inside this element (a list or panel) instead of the page."]]),
-        tool("select_option", "Choose an option in a drop-down (<select>) by its text or value.",
-             ["ref": ["type": "integer"], "option": ["type": "string"]], required: ["ref", "option"]),
-        tool("wait_for", "Wait for the page to finish loading, or for some text to appear on it.",
-             ["text": ["type": "string"], "seconds": ["type": "number", "description": "Give up after this long. Default 10, at most 60."]]),
+              "new_tab": ["type": "boolean", "description": "false loads it in your current tab (or `tab`) instead. Default true."],
+              "background": ["type": "boolean", "description": "Open the new tab out of sight. Default false."],
+              "tab": tabParam], required: ["url"]),
+        tool("switch_tab", "Make a tab your current tab. By default it is also brought to the front for the user to see; with bring_to_front false you work in it out of sight.",
+             ["tab": ["type": "string", "description": "The tab's id from list_tabs (the first few characters are enough)."],
+              "bring_to_front": ["type": "boolean", "description": "Default true."]], required: ["tab"]),
+        tool("show_side_by_side", "Show two neighbouring tabs of the same row in split view, so the user can watch you work in both. Only when the user wants to watch; otherwise work in background tabs.",
+             ["tab": ["type": "string"], "other_tab": ["type": "string"]], required: ["tab", "other_tab"]),
+        tool("close_tab", "Close one of the tabs in your own rows (never the user's).", ["tab": ["type": "string"]], required: ["tab"]),
+        tool("name_row", "Name the row a tab of yours is in, so the user can find your work in the map. An empty name returns it to automatic naming.",
+             ["name": ["type": "string"], "tab": tabParam], required: ["name"]),
+        tool("list_downloads", "List Tabmap's recent downloads: file, progress or result, size, where it was saved and the site it came from.",
+             ["limit": ["type": "integer", "description": "How many, newest first. Default 10."]]),
+        pageTool("go", "Back, forward or reload.", ["action": ["type": "string", "enum": ["back", "forward", "reload"]] as [String: Any]], required: ["action"]),
+        pageTool("read_page", "Read a page as text: headings, text, and numbered elements you can click, type into, hover, scroll or choose from. When the user has allowed Tabmap to use macOS accessibility it reads the accessibility tree (refs like [a12], includes frames from other sites); otherwise the page's HTML (refs like [12]). Password fields are shown but never their contents.",
+                 ["interactive_only": ["type": "boolean", "description": "Only list the elements you can act on. Default false."],
+                  "find": ["type": "string", "description": "Only return lines containing this text (to find one button or field on a long page)."],
+                  "mode": ["type": "string", "enum": ["auto", "accessibility", "dom"], "description": "Default auto. Use dom for select_option refs."] as [String: Any],
+                  "max_chars": ["type": "integer", "description": "Longest answer, default 20000."]]),
+        pageTool("screenshot", "See what a page looks like right now (just that page, never the user's screen; works for background tabs too). Prefer read_page; use this only when the layout or an image matters.", [:]),
+        pageTool("click", "Click an element (by ref from read_page) or a spot (x, y in the last screenshot's pixels) with a real mouse click, scrolling it into view first, then wait for the page to settle. If it opens a new tab, that becomes your current tab.",
+                 ["ref": refParam, "x": ["type": "number"], "y": ["type": "number"],
+                  "double": ["type": "boolean", "description": "Double-click. Default false."]]),
+        pageTool("hover", "Move the pointer over an element or spot without clicking (opens hover menus and tooltips).",
+                 ["ref": refParam, "x": ["type": "number"], "y": ["type": "number"]]),
+        pageTool("type_text", "Type text with real key presses, into the element given by ref (clicked first) or else into whatever has focus. Never use it for passwords: the user is asked to sign in themselves.",
+                 ["text": ["type": "string"], "ref": refParam,
+                  "clear": ["type": "boolean", "description": "Select all and delete what is there first. Default false."],
+                  "submit": ["type": "boolean", "description": "Press Enter afterwards and wait for the page. Default false."]], required: ["text"]),
+        pageTool("press_key", "Press one key or shortcut: Enter, Tab, Escape, Backspace, ArrowUp/Down/Left/Right, PageUp/PageDown, Home, End, Space, or combos like cmd+a, shift+Tab.",
+                 ["key": ["type": "string"]], required: ["key"]),
+        pageTool("scroll", "Scroll with the mouse wheel, over the page or over a part of it given by ref, then wait briefly for anything it loads.",
+                 ["direction": ["type": "string", "enum": ["up", "down", "left", "right"]] as [String: Any],
+                  "amount": ["type": "number", "description": "How far, in screens. Default 0.8."],
+                  "ref": refParam]),
+        pageTool("select_option", "Choose an option in a drop-down (<select>) by its text or value. Needs a plain-number ref (read_page mode dom).",
+                 ["ref": ["type": "integer"], "option": ["type": "string"]], required: ["ref", "option"]),
+        pageTool("wait_for", "Wait until the page has loaded and settled (no network requests finishing and no content changing for half a second), or until some text appears, or until some text is gone (a spinner or \"Saving…\").",
+                 ["text": ["type": "string"], "gone": ["type": "string"],
+                  "seconds": ["type": "number", "description": "Give up after this long. Default 10, at most 60."]]),
         tool("wait_for_user", "When a tool said the user is needed (a human check, a password, a question from the page), wait here until they finish.",
              ["seconds": ["type": "number", "description": "Give up after this long. Default 300."]]),
     ]
@@ -782,6 +1134,35 @@ final class AgentTools {
         if !required.isEmpty { schema["required"] = required }
         return ["name": name, "description": description, "inputSchema": schema]
     }
+
+    /// Resolves once the page has been quiet for `args.quiet` ms (no resource finishing loading, no
+    /// nodes or text changing), or at `args.max` ms. Runs in Claude's own content world.
+    static let settleScript = #"""
+    const quiet = args.quiet, max = args.max;
+    const start = performance.now();
+    let last = start;
+    let count = performance.getEntriesByType('resource').length;
+    const mark = function () { last = performance.now(); };
+    const mo = new MutationObserver(mark);
+    mo.observe(document, { subtree: true, childList: true, characterData: true });
+    let po = null;
+    try { po = new PerformanceObserver(mark); po.observe({ type: 'resource' }); } catch (e) {}
+    return await new Promise(function (resolve) {
+      function done(ok) {
+        mo.disconnect(); if (po) po.disconnect();
+        resolve({ settled: ok, waited: Math.round(performance.now() - start) });
+      }
+      function tick() {
+        const now = performance.now();
+        const n = performance.getEntriesByType('resource').length;
+        if (n !== count) { count = n; last = now; }
+        if (document.readyState === 'complete' && now - last >= quiet) return done(true);
+        if (now - start >= max) return done(false);
+        setTimeout(tick, 100);
+      }
+      tick();
+    });
+    """#
 
     // MARK: Page scripts
 

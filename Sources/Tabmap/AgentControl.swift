@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import UserNotifications
+import WebKit
 import TabMapCore
 
 /// "Let Claude control Tabmap": whether it is on, what Claude is doing right now, and the person's
@@ -37,6 +38,10 @@ final class AgentControl: NSObject, ObservableObject {
     /// The page Claude is working on, in the window's content, top-left origin.
     @Published private(set) var pageFrame: CGRect?
     @Published private(set) var serverStatus = "Off"
+    /// Claude acted on a page the person can see in the last few seconds: the glow and pointer show.
+    @Published private(set) var frontActive = false
+    /// Background tabs Claude is working in right now, with what it is doing in each.
+    @Published private(set) var backgroundWork: [TabID: String] = [:]
 
     @Published var enabled: Bool = UserDefaults.standard.bool(forKey: AgentControl.enabledKey) {
         didSet {
@@ -62,6 +67,8 @@ final class AgentControl: NSObject, ObservableObject {
     private(set) var handOverClearsItself = false
     private var stoppedUntil: Date?
     private var idleTask: Task<Void, Never>?
+    private var frontTask: Task<Void, Never>?
+    private var backgroundSeen: [TabID: Date] = [:]
     private var monitor: Any?
     /// Where Claude's pointer last was, in window coordinates (bottom-left origin).
     var pointer: NSPoint?
@@ -100,6 +107,7 @@ final class AgentControl: NSObject, ObservableObject {
             AgentServer.shared.stop()
             serverStatus = "Off"
             finish()
+            AgentStage.shared.releaseAll()
         }
     }
 
@@ -122,11 +130,11 @@ final class AgentControl: NSObject, ObservableObject {
     }
 
     /// Every action calls this first. Throws when the person has stopped Claude or a page is waiting on them.
-    func begin(_ what: String) throws {
+    /// `front` false: the tab is out of sight (AgentStage), so no glow or pointer, just a count on the pill.
+    func begin(_ what: String, tab: TabID? = nil, front: Bool = true) throws {
         try checkAllowed()
         phase = .driving
-        status = what
-        keepAlive()
+        noteStatus(what, tab: tab, front: front)
     }
 
     /// Between the steps of a longer action (a pointer move, each typed key): lets Stop take effect at once.
@@ -148,9 +156,35 @@ final class AgentControl: NSObject, ObservableObject {
         return false
     }
 
-    func noteStatus(_ what: String) {
-        status = what
+    func noteStatus(_ what: String, tab: TabID? = nil, front: Bool = true) {
+        if front {
+            status = what
+            frontActive = true
+            frontTask?.cancel()
+            frontTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                guard !Task.isCancelled, let self else { return }
+                self.frontActive = false
+                self.cursor = nil
+                if let latest = self.backgroundSeen.max(by: { $0.value < $1.value })?.key {
+                    self.status = self.backgroundWork[latest] ?? self.status
+                }
+            }
+        } else if let tab {
+            backgroundWork[tab] = what
+            backgroundSeen[tab] = Date()
+            if !frontActive { status = what }
+        }
+        pruneBackground()
         keepAlive()
+    }
+
+    private func pruneBackground() {
+        let cutoff = Date().addingTimeInterval(-20)
+        for (tab, seen) in backgroundSeen where seen < cutoff {
+            backgroundSeen[tab] = nil
+            backgroundWork[tab] = nil
+        }
     }
 
     /// The glow stays while Claude keeps acting; it fades out after a quiet spell.
@@ -165,9 +199,13 @@ final class AgentControl: NSObject, ObservableObject {
 
     private func finish() {
         idleTask?.cancel()
+        frontTask?.cancel()
         if phase == .driving { phase = .idle }
         cursor = nil
         status = ""
+        frontActive = false
+        backgroundWork = [:]
+        backgroundSeen = [:]
     }
 
     /// Claude's pointer moved (window coordinates, bottom-left origin). `page` is the web view it is over.
@@ -192,10 +230,14 @@ final class AgentControl: NSObject, ObservableObject {
     /// Stop button, or the person clicked or typed in the window while Claude was acting.
     func stop() {
         idleTask?.cancel()
+        frontTask?.cancel()
         phase = .stopped
         stoppedUntil = Date().addingTimeInterval(120)
         cursor = nil
         status = ""
+        frontActive = false
+        backgroundWork = [:]
+        backgroundSeen = [:]
         // Back to normal on its own after a while, so the pill doesn't linger.
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 120_000_000_000)
@@ -243,6 +285,20 @@ final class AgentControl: NSObject, ObservableObject {
 
     private var dialogOpen = false
 
+    /// The tab a hand-over is about, when it isn't the one in front.
+    var waitingTab: TabID? { isWaitingForPerson ? handOverTab : nil }
+
+    func showWaitingTab() {
+        guard let tab = handOverTab else { return }
+        let store = BrowserStore.shared
+        if AppDock.shared.isFront { AppDock.shared.sendToBack() }
+        if store.overviewShown {
+            GestureNavigator.shared.closeOverview(showing: tab)
+        } else {
+            store.choose(tab)
+        }
+    }
+
     /// Done on the pill, or the page no longer needs the person.
     func personDone() {
         guard isWaitingForPerson else { return }
@@ -254,18 +310,34 @@ final class AgentControl: NSObject, ObservableObject {
         }
     }
 
-    /// The person's own clicks and keys in the window take control back. Claude's input goes straight
-    /// to the web view and never passes through here.
+    /// The person's own clicks and keys on the page Claude is driving take control back. Claude's input
+    /// goes straight to the web view and never passes through here. While Claude only works in
+    /// background tabs, the person can use the window freely; Stop on the pill still stops it.
     private func installMonitor() {
         guard monitor == nil else { return }
         let mask: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]
         monitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
-            if let self, self.phase == .driving, let window = BrowserStore.shared.window, event.window === window,
-               !self.isOwnEvent(event) {
+            if let self, self.phase == .driving, self.frontActive, let window = BrowserStore.shared.window,
+               event.window === window, !self.isOwnEvent(event), self.isOnClaudesPage(event, in: window) {
                 self.stop()
             }
             return event
         }
+    }
+
+    private func isOnClaudesPage(_ event: NSEvent, in window: NSWindow) -> Bool {
+        if event.type == .keyDown {
+            // Typing goes to a page (Claude's, or the other half of a split): either way it is the person's.
+            var responder = window.firstResponder as? NSView
+            while let view = responder {
+                if view is WKWebView { return true }
+                responder = view.superview
+            }
+            return false
+        }
+        guard let frame = pageFrame, let content = window.contentView else { return true }
+        let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
+        return frame.contains(point)
     }
 
     // MARK: Notifications
@@ -323,7 +395,7 @@ struct AgentOverlay: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            if let frame = control.pageFrame, showsGlow, !store.overviewShown {
+            if let frame = control.pageFrame, showsGlow, control.frontActive || control.isWaitingForPerson, !store.overviewShown {
                 RoundedRectangle(cornerRadius: 10)
                     .strokeBorder(Self.claudeOrange.opacity(glowIsCalm ? 0.6 : 0.9), lineWidth: 3)
                     .shadow(color: Self.claudeOrange.opacity(0.8), radius: 10)
@@ -332,7 +404,7 @@ struct AgentOverlay: View {
                     .allowsHitTesting(false)
                     .transition(.opacity)
             }
-            if let point = control.cursor, control.phase == .driving, !store.overviewShown {
+            if let point = control.cursor, control.phase == .driving, control.frontActive, !store.overviewShown {
                 AgentCursor()
                     .offset(x: point.x - 3, y: point.y - 2)
                     .allowsHitTesting(false)
@@ -410,7 +482,13 @@ private struct AgentPill: View {
 
     private var message: String {
         switch control.phase {
-        case .driving: return control.status.isEmpty ? "Claude is driving" : "Claude: \(control.status)"
+        case .driving:
+            let others = control.backgroundWork.count
+            if !control.frontActive && others > 0 {
+                return "Claude, in \(others) background tab\(others == 1 ? "" : "s"): \(control.status)"
+            }
+            let base = control.status.isEmpty ? "Claude is driving" : "Claude: \(control.status)"
+            return others > 0 ? base + " · +\(others) in background" : base
         case .needsYou(let reason): return "Your turn: \(reason)"
         case .stopped: return "Claude stopped"
         case .idle: return ""
@@ -423,6 +501,10 @@ private struct AgentPill: View {
             pillButton("Stop", systemImage: "stop.fill") { control.stop() }
                 .help("Take back control. Clicking or typing in the page also stops Claude.")
         case .needsYou:
+            if let tab = control.waitingTab, BrowserStore.shared.map.activeTabID != tab {
+                pillButton("Show", systemImage: "eye") { control.showWaitingTab() }
+                    .help("Open the tab that needs you")
+            }
             pillButton("Done", systemImage: "checkmark") { control.personDone() }
                 .help("Let Claude carry on")
         case .stopped:
@@ -453,12 +535,23 @@ struct AgentSettingsSection: View {
     var body: some View {
         Section("Claude") {
             Toggle("Let Claude control Tabmap", isOn: $control.enabled)
-            Text("Claude can read pages, click, type and scroll in your signed-in Tabmap, with real mouse and keyboard input. It works in its own row, shows its pointer and a Stop button, and stops when you click or type. When a site asks whether you're human, Claude stops and sends you a notification. Only programs on this Mac with the key below can connect.")
+            Text("Claude can read pages, click, type and scroll in your signed-in Tabmap, with real mouse and keyboard input. It works in its own row, often in background tabs while you use other ones, shows its pointer and a Stop button, and stops when you click or type in the page it is driving. When a site asks whether you're human, Claude stops and sends you a notification. Only programs on this Mac with the key below can connect.")
                 .font(.system(size: 11)).foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if control.enabled {
                 Text("Server: \(control.serverStatus)")
                     .font(.system(size: 11)).foregroundColor(.secondary)
+                if AgentAccessibility.shared.isAvailable {
+                    Text("Claude reads pages through macOS accessibility, the way VoiceOver does.")
+                        .font(.system(size: 11)).foregroundColor(.secondary)
+                } else {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Claude reads pages from their HTML. Allowing Tabmap under Privacy & Security > Accessibility lets it read them the way VoiceOver does, including frames from other sites.")
+                            .font(.system(size: 11)).foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Allow…") { AgentAccessibility.shared.requestPermission() }
+                    }
+                }
                 Text("Add it to Claude Code by running this in Terminal:")
                     .font(.system(size: 11)).foregroundColor(.secondary)
                 Text(control.claudeCodeCommand)
