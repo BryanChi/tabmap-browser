@@ -85,7 +85,8 @@ final class DownloadStore: NSObject, ObservableObject, WKDownloadDelegate {
     }
 
     /// Starts tracking a download, credited to `tab`. Also used by the page's right-click menu.
-    func begin(_ download: WKDownload, tab: TabID?) {
+    /// `page` names the page for a file that comes from outside the map (a dock app).
+    func begin(_ download: WKDownload, tab: TabID?, page: (url: URL?, title: String)? = nil) {
         let browser = BrowserStore.shared
         let source = download.originalRequest?.url
         let mapTab = browser.map.tab(tab)
@@ -93,8 +94,8 @@ final class DownloadStore: NSObject, ObservableObject, WKDownloadDelegate {
         let name = Self.cleanName(source?.lastPathComponent ?? "")
         let id = ledger.start(filename: name,
                               sourceURL: source,
-                              pageURL: mapTab?.url,
-                              pageTitle: mapTab?.displayTitle ?? "",
+                              pageURL: mapTab?.url ?? page?.url,
+                              pageTitle: mapTab?.displayTitle ?? page?.title ?? "",
                               tabID: mapTab == nil ? nil : tab,
                               trailID: trail,
                               now: Date())
@@ -499,5 +500,34 @@ extension WebTab {
 
     func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
         DownloadStore.shared.adopt(download, from: self)
+    }
+}
+
+/// Dock apps (Gmail and the like) and their peeks save files the same way map tabs do.
+extension DockPage {
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor navigationResponse: WKNavigationResponse) async -> WKNavigationResponsePolicy {
+        DownloadStore.shouldDownload(navigationResponse) ? .download : .allow
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        adoptDownload(download)
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        adoptDownload(download)
+    }
+
+    private func adoptDownload(_ download: WKDownload) {
+        let dock = AppDock.shared
+        let app = dock.page(appID)
+        // The file is credited to the app's page, not to an empty peek opened just to fetch it.
+        let source = (role == .app || webView.backForwardList.currentItem != nil) ? self : (app ?? self)
+        DownloadStore.shared.begin(download, tab: nil, page: (source.url, source.displayTitle))
+        // A peek that only existed to hand over the file goes away again.
+        if role != .app, webView.backForwardList.currentItem == nil {
+            let empty = id
+            Task { @MainActor in AppDock.shared.closePeek(empty) }
+        }
     }
 }

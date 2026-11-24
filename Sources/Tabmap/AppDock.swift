@@ -105,6 +105,8 @@ final class DockPage: NSObject, ObservableObject, Identifiable, WKNavigationDele
             NSWorkspace.shared.open(link)
             return .cancel
         }
+        // <a download> and the like save the file here, before the peek rule below can catch the link.
+        if navigationAction.shouldPerformDownload { return .download }
 
         guard navigationAction.navigationType == .linkActivated else { return .allow }
         let mainFrame = navigationAction.targetFrame?.isMainFrame ?? true
