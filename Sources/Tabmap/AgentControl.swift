@@ -451,7 +451,7 @@ struct AgentSettingsSection: View {
     @State private var copied = false
 
     var body: some View {
-        Section {
+        Section("Claude") {
             Toggle("Let Claude control Tabmap", isOn: $control.enabled)
             Text("Claude can read pages, click, type and scroll in your signed-in Tabmap, with real mouse and keyboard input. It works in its own row, shows its pointer and a Stop button, and stops when you click or type. When a site asks whether you're human, Claude stops and sends you a notification. Only programs on this Mac with the key below can connect.")
                 .font(.system(size: 11)).foregroundColor(.secondary)

@@ -511,7 +511,7 @@ struct PasswordSettingsSection: View {
     @State private var managing = false
 
     var body: some View {
-        Section {
+        Section("Passwords") {
             Toggle("Fill saved passwords and suggest strong ones", isOn: $autofill)
             Toggle("Offer to save passwords", isOn: $offerSave)
             Toggle("Ask for Touch ID or your Mac password before filling", isOn: $requireUnlock)

@@ -41,7 +41,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             DefaultBrowserSection()
-            Section {
+            Section("Tabs") {
                 Picker("Unload a tab's page after", selection: binding(\.sleepAfter)) {
                     ForEach(Self.sleepChoices) { Text($0.label).tag($0.value) }
                 }
@@ -56,7 +56,7 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Section {
+            Section("Memory and Search") {
                 Stepper("Keep at most \(store.map.settings.maxLoadedTabs) pages in memory",
                         value: binding(\.maxLoadedTabs), in: 2...60)
                 Picker("Search with", selection: binding(\.searchTemplate)) {
@@ -69,33 +69,33 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Section {
+            Section("Tab Bar") {
                 Toggle("Show a tab bar with the current row's tabs", isOn: $store.tabBarShown)
                 Text("Like Safari's compact tabs: tabs share the width and shrink as the row grows. Click the current tab to type an address.")
                     .font(.system(size: 11)).foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Section {
+            Section("Swiping") {
                 Toggle("Swipe past the edge of a page to move through the map", isOn: $edgeSwipe)
                 Text("With this off, hold ⌥ while swiping with two fingers to move between tabs.")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }
-            Section {
+            Section("New Tabs") {
                 Toggle("Zoom out to the map when a link opens a new tab", isOn: $newTabHop)
                 Text("The page shrinks onto its card, the new tab pops into its row, then it zooms in. Off: the new page slides in.")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }
             ContentBlockingSettings()
-            Section {
+            Section("Duplicate Pages") {
                 Toggle("Go to the existing tab instead of opening a page twice", isOn: $jumpToDuplicates)
                 Text("Hold ⌥ when pressing Return in the address bar, or use Duplicate Tab (⇧⌘D), to get a copy anyway.")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Section {
+            Section("Row Suggestions") {
                 Toggle("Suggest joining rows that are about the same thing", isOn: $mergeSuggestions)
                     .onChange(of: mergeSuggestions) { _ in store.mergeAdvisor.settingChanged() }
                 Text(MergeAdvisor.modelAvailable
@@ -104,7 +104,7 @@ struct SettingsView: View {
                     .font(.system(size: 11)).foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Section {
+            Section("Bookmarks") {
                 Picker("Show bookmarks when the pointer rests in a corner", selection: $bookmarkCorner) {
                     ForEach(BookmarkStore.HotCorner.allCases) { Text($0.label).tag($0.rawValue) }
                 }
@@ -118,8 +118,8 @@ struct SettingsView: View {
             PasswordSettingsSection()
             AgentSettingsSection()
         }
-        .padding(20)
-        .frame(width: 460)
+        .formStyle(.grouped)
+        .frame(width: 600, height: 640)
     }
 
     private func binding<Value>(_ keyPath: WritableKeyPath<MapSettings, Value>) -> Binding<Value> {

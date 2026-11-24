@@ -178,7 +178,7 @@ struct DefaultBrowserSection: View {
     @State private var asking = false
 
     var body: some View {
-        Section {
+        Section("Default Browser") {
             HStack {
                 Text(isDefault ? "Tabmap is your default browser" : "Tabmap is not your default browser")
                 Spacer()

@@ -370,7 +370,7 @@ struct ContentBlockingSettings: View {
     @ObservedObject private var blocker = ContentBlocker.shared
 
     var body: some View {
-        Section {
+        Section("Content Blocking") {
             Toggle("Block ads and trackers", isOn: $blocker.enabled)
             Text(statusText)
                 .font(.system(size: 11)).foregroundColor(.secondary)
